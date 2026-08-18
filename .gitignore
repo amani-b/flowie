@@ -1,8 +1,22 @@
+# Dependencies
 node_modules/
-.next/
+
+# Build output
 dist/
 build/
+.next/
+
+# Logs & coverage
 *.log
+coverage/
+
+# OS & editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
 
 # Secrets — never commit real env values
 .env
