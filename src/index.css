@@ -1,1 +1,209 @@
 @import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------- Theme tokens (flip with .dark on <html>) ---------- */
+:root {
+  --bg: #edf1ec;
+  --bg-deep: #e3e9e2;
+  --surface: rgba(255, 255, 255, 0.62);
+  --surface-solid: #fdfdfb;
+  --ink: #131a15;
+  --muted: #5d6b61;
+  --line: rgba(19, 26, 21, 0.1);
+  --line-strong: rgba(19, 26, 21, 0.18);
+  --acc: #0c9d6c;
+  --acc-soft: rgba(12, 157, 108, 0.12);
+  --acc-ink: #f2fbf6;
+  --amber: #c97a00;
+  --amber-soft: rgba(201, 122, 0, 0.14);
+  --cool: #1f7fa8;
+  --cool-soft: rgba(31, 127, 168, 0.12);
+  --danger: #cf3f4c;
+  --danger-soft: rgba(207, 63, 76, 0.12);
+  --mannequin: #c8d0ca;
+  --mannequin-shade: #b3bcb5;
+  --glow-a: rgba(12, 157, 108, 0.17);
+  --glow-b: rgba(201, 122, 0, 0.14);
+  --shadow-card: 0 1px 2px rgba(19, 26, 21, 0.05), 0 12px 32px -16px rgba(19, 26, 21, 0.22);
+}
+
+.dark {
+  --bg: #0c110d;
+  --bg-deep: #0a0e0b;
+  --surface: rgba(23, 31, 26, 0.58);
+  --surface-solid: #141b16;
+  --ink: #e9f0e9;
+  --muted: #90a095;
+  --line: rgba(233, 240, 233, 0.1);
+  --line-strong: rgba(233, 240, 233, 0.18);
+  --acc: #3ddc97;
+  --acc-soft: rgba(61, 220, 151, 0.13);
+  --acc-ink: #06281a;
+  --amber: #ffb84d;
+  --amber-soft: rgba(255, 184, 77, 0.13);
+  --cool: #6cc3e8;
+  --cool-soft: rgba(108, 195, 232, 0.12);
+  --danger: #ff7b84;
+  --danger-soft: rgba(255, 123, 132, 0.14);
+  --mannequin: #3e4a42;
+  --mannequin-shade: #333d36;
+  --glow-a: rgba(61, 220, 151, 0.12);
+  --glow-b: rgba(255, 184, 77, 0.09);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 40px -18px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------- Map tokens into Tailwind utilities ---------- */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bgdeep: var(--bg-deep);
+  --color-card: var(--surface-solid);
+  --color-ink: var(--ink);
+  --color-mut: var(--muted);
+  --color-line: var(--line);
+  --color-linestrong: var(--line-strong);
+  --color-acc: var(--acc);
+  --color-accsoft: var(--acc-soft);
+  --color-accink: var(--acc-ink);
+  --color-amber: var(--amber);
+  --color-ambersoft: var(--amber-soft);
+  --color-cool: var(--cool);
+  --color-coolsoft: var(--cool-soft);
+  --color-danger: var(--danger);
+  --color-dangersoft: var(--danger-soft);
+  --font-display: "Syne", "Manrope", sans-serif;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+::selection {
+  background: var(--acc);
+  color: var(--acc-ink);
+}
+
+/* ---------- Reusable surfaces ---------- */
+.glass {
+  background: var(--surface);
+  backdrop-filter: blur(22px) saturate(1.5);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  border: 1px solid var(--line);
+}
+
+.card {
+  background: var(--surface-solid);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-card);
+}
+
+.label-micro {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.field {
+  width: 100%;
+  background: var(--surface-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.field::placeholder {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.field:focus {
+  border-color: var(--acc);
+  box-shadow: 0 0 0 3px var(--acc-soft);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Motion helpers ---------- */
+@keyframes drift-a {
+  0% {
+    transform: translate3d(-6%, -4%, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(5%, 7%, 0) scale(1.15);
+  }
+}
+
+@keyframes drift-b {
+  0% {
+    transform: translate3d(4%, 6%, 0) scale(1.1);
+  }
+  100% {
+    transform: translate3d(-6%, -5%, 0) scale(0.95);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -450px 0;
+  }
+  100% {
+    background-position: 450px 0;
+  }
+}
+
+.skeleton {
+  border-radius: 12px;
+  background: linear-gradient(
+    90deg,
+    var(--line) 25%,
+    var(--line-strong) 50%,
+    var(--line) 75%
+  );
+  background-size: 900px 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+.pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}

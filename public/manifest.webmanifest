@@ -1,0 +1,19 @@
+{
+  "name": "FitFlow AI — Smart Closet & Daily Stylist",
+  "short_name": "FitFlow",
+  "description": "A smart closet, daily stylist and outfit visualizer that dresses you for the actual weather.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0C110D",
+  "theme_color": "#0C110D",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
