@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Bookmark, Cpu, RefreshCw, Shirt, Sparkles, Wand2 } from "lucide-react";
+import { AlertTriangle, Bookmark, RefreshCw, Shirt, Sparkles, Wand2 } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { cn, OCCASION_META, VIBE_TO_OCCASION } from "../lib/utils";
 import type { Garment, Occasion } from "../types";
@@ -90,16 +90,6 @@ export default function Studio() {
           <p className="label-micro">Styling studio</p>
           <h1 className="font-display text-[27px] font-extrabold tracking-tight">Studio</h1>
         </div>
-        <span className="mb-1.5 flex items-center gap-1.5 rounded-full border border-line bg-card px-2.5 py-1 text-[10px] font-extrabold tracking-[0.12em] text-mut">
-          {result?.engine === "gemini" || generation.status === "idle" ? (
-            <Sparkles className="h-3 w-3 text-acc" />
-          ) : (
-            <Cpu className="h-3 w-3 text-amber" />
-          )}
-          {generation.status === "done" && result?.engine === "heuristic"
-            ? "HEURISTIC"
-            : "GEMINI READY"}
-        </span>
       </header>
 
       {/* occasion picker */}
