@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Home, Image, Shirt, Wand2, type LucideIcon } from "lucide-react";
+import { Calendar, Home, Image, Shirt, Wand2, type LucideIcon } from "lucide-react";
 import type { TabId } from "../types";
 import { cn } from "../lib/utils";
 import { useAppStore } from "../store/appStore";
@@ -9,6 +9,7 @@ const TABS: Array<{ id: TabId; label: string; icon: LucideIcon }> = [
   { id: "closet", label: "Closet", icon: Shirt },
   { id: "studio", label: "Studio", icon: Wand2 },
   { id: "looks", label: "Looks", icon: Image },
+  { id: "calendar", label: "Plan", icon: Calendar },
 ];
 
 export default function BottomNav() {
