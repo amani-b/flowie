@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { applyThemeToDom, useAppStore } from "./store/appStore";
 import Ambient from "./components/Ambient";
@@ -7,6 +8,7 @@ import BottomNav from "./components/BottomNav";
 import Drawer from "./components/Drawer";
 import Toast from "./components/Toast";
 import AuthScreen from "./screens/AuthScreen";
+import AuthCallback from "./screens/AuthCallback";
 import Onboarding from "./screens/Onboarding";
 import Home from "./screens/Home";
 import Closet from "./screens/Closet";
@@ -74,21 +76,16 @@ function Shell() {
   );
 }
 
-export default function App() {
+function AppContent() {
   const authStatus = useAppStore((s) => s.authStatus);
   const user = useAppStore((s) => s.user);
   const onboardedUsers = useAppStore((s) => s.onboardedUsers);
   const theme = useAppStore((s) => s.theme);
-  const boot = useAppStore((s) => s.boot);
 
   // Keep the DOM class in sync with the persisted theme on boot & change.
   useEffect(() => {
     applyThemeToDom(theme);
   }, [theme]);
-
-  useEffect(() => {
-    void boot();
-  }, [boot]);
 
   const onboarded = !!user && onboardedUsers.includes(user.id);
 
@@ -106,5 +103,23 @@ export default function App() {
       )}
       <Toast />
     </div>
+  );
+}
+
+export default function App() {
+  const boot = useAppStore((s) => s.boot);
+
+  useEffect(() => {
+    void boot();
+  }, [boot]);
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<AppContent />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/auth" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
   );
 }

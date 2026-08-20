@@ -162,7 +162,10 @@ export async function signInWithGoogle(): Promise<void> {
   }
   const { error } = await supabase.auth.signInWithOAuth({
     provider: "google",
-    options: { redirectTo: window.location.origin },
+    options: { 
+      redirectTo: `${window.location.origin}/auth/callback`,
+      queryParams: { access_type: "offline", prompt: "consent" },
+    },
   });
   if (error) throw new Error(friendly(error.message));
   // Browser redirects to Google; the session is picked up on return.
