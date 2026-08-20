@@ -12,6 +12,7 @@ import Home from "./screens/Home";
 import Closet from "./screens/Closet";
 import Studio from "./screens/Studio";
 import Looks from "./screens/Looks";
+import CalendarView from "./screens/Calendar";
 import { LogoMark } from "./components/icons";
 
 const SCREENS = {
@@ -19,6 +20,7 @@ const SCREENS = {
   closet: Closet,
   studio: Studio,
   looks: Looks,
+  calendar: CalendarView,
 } as const;
 
 function Splash() {
