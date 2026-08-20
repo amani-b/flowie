@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Camera, Loader2, Plus, RotateCcw, Search, Trash2 } from "lucide-react";
+import { Camera, Loader2, Plus, RotateCcw, Search, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { CATEGORIES } from "../lib/mock";
 import {
@@ -15,6 +15,7 @@ import type { Category, Formality, Garment, Warmth } from "../types";
 import GarmentCard from "../components/GarmentCard";
 import Sheet from "../components/Sheet";
 import { GarmentGlyph, LogoMark } from "../components/icons";
+import { tagGarmentPhoto, taggingToGarment, geminiReady } from "../services/aiStylistService";
 
 type Filter = "all" | Category;
 

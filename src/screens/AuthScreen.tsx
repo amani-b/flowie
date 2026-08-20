@@ -168,6 +168,19 @@ export default function AuthScreen() {
             >
               <MailCheck className="h-4 w-4" /> Back to login
             </button>
+            <p className="mt-3 text-[11px] font-bold text-mut">
+              Already confirmed? You can also{" "}
+              <button
+                onClick={() => {
+                  setNeedsConfirm(false);
+                  setMode("login");
+                }}
+                className="font-extrabold text-acc underline decoration-acc underline-offset-2"
+              >
+                switch to the login form
+              </button>{" "}
+              and sign in now.
+            </p>
           </div>
         ) : (
           <div key={shakeKey}>
