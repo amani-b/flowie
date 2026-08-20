@@ -1,190 +1,59 @@
-```
+```gitignore
 # Dependencies
 node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+
+# Build outputs
+dist/
+build/
+public/dist/
+.next/
+.nuxt/
+.un~$
+*.min.js
+*.min.css
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Environment variables
 .env
 .env.local
 .env.*
+!.env.example
 
-# Build outputs
-dist/
-build/
-target/
-
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Logs
-*.log
-
-# IDE and editor settings
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS generated files
 .DS_Store
 Thumbs.db
 
-# Coverage reports
+# Testing
 coverage/
-htmlcov/
-.coverage
+.nyc_output/
+istanbul/
+.jest/
 
-# Compressed archives
-*.zip
-*.gz
-*.tar
-*.tgz
-*.bz2
-*.xz
-*.7z
-*.rar
-*.zst
-*.lz4
-*.lzh
-*.cab
-*.arj
-*.rpm
-*.deb
-*.Z
-*.lz
-*.lzo
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
+# OS generated files
+ehthumbs.db
+Icon?
+._*
 
 # Temporary files
 *.tmp
-
-# Package manager caches
-.npm/
-.yarn/
-.pnpm/
-
-# TypeScript
-*.tsbuildinfo
-.next/
-.nuxt/
-.vuepress/dist
-.output
-.vercel
-
-# Rust
-Cargo.lock
-*.so
-*.dylib
-*.dll
-
-# Java
-*.class
-*.jar
-*.war
-*.ear
-hs_err_pid*
-
-# C#
-*.dll
-*.exe
-*.pdb
-*.nupkg
-bin/
-obj/
-
-# Go
-*.exe
-*.test
-*.prof
-
-# Ruby
-*.gem
-*.rbc
-.bundle
-vendor/bundle
-.rbenv-gemsets
-
-# PHP
-vendor/
-
-# Elixir
-mix.lock
-.erlang.cookie
-
-# Julia
-.julia/
-
-# Zig
-zig-cache/
-zig-out/
-
-# MyPy
-.mypy_cache/
-
-# PyTest
-.pytest_cache/
-
-# Django
-*.sqlite3
-*.sqlite
-db.sqlite3
-
-# Flask
-instance/
-.webassets-cache
-
-# Jupyter Notebooks
-.ipynb_checkpoints/
-
-# Gradle
-.gradle/
-build/
-
-# Maven
-target/
-
-# SASS/SCSS
-.sass-cache/
-
-# Ember
-.ember-cli
-tmp/
-bower_components/
-
-# Angular
-angular-cli-build.js
-
-# Vue
-.vuepress/dist
-
-# Webpack
-webpack-stats.json
-
-# Jest
-coverage/
-*.lcov
-
-# Karma
-.karma
-
-# Protractor
-protractor.log
-
-# Node-Sass
-.sass-cache/
-
-# ESLint
-eslint-cache
-
-# Babel
-.cache/
-
-# Gatsby
-.cache/
-public/
+*.temp
+*~
 ```
+
+Wait, I need to reconsider. The only modified file is `src/screens/Calendar.tsx`, which is a TypeScript React component file. This appears to be source code, not build artifacts, dependencies, or temporary files. According to rule #6, if the change list contains only source or config files and no build artifacts, dependencies, or temp files, I should output an empty .gitignore.
+
+Since only a source file was modified (`Calendar.tsx`), no additional ignore rules are needed beyond what might already exist.
+
+(empty)

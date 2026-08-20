@@ -4,8 +4,8 @@ import { Calendar, ChevronLeft, ChevronRight, Clock, Trash2 } from "lucide-react
 import { useAppStore } from "../store/appStore";
 import { cn, timeAgo } from "../lib/utils";
 import type { SavedLook } from "../types";
-import Avatar from "./Avatar";
-import Sheet from "./Sheet";
+import Avatar from "../components/Avatar";
+import Sheet from "../components/Sheet";
 import { OCCASION_META } from "../lib/utils";
 
 /**
