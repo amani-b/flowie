@@ -1,59 +1,64 @@
-```gitignore
-# Dependencies
-node_modules/
-.pnpm-store/
-.npm/
-.yarn/
-
-# Build outputs
+```
+# Build artifacts
 dist/
 build/
-public/dist/
-.next/
-.nuxt/
-.un~$
-*.min.js
-*.min.css
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
 
 # Logs
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
-# Environment variables
-.env
-.env.local
-.env.*
-!.env.example
-
-# IDE and editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
-
-# Testing
-coverage/
-.nyc_output/
-istanbul/
-.jest/
-
-# OS generated files
-ehthumbs.db
-Icon?
-._*
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
 # Temporary files
 *.tmp
-*.temp
-*~
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
 ```
-
-Wait, I need to reconsider. The only modified file is `src/screens/Calendar.tsx`, which is a TypeScript React component file. This appears to be source code, not build artifacts, dependencies, or temporary files. According to rule #6, if the change list contains only source or config files and no build artifacts, dependencies, or temp files, I should output an empty .gitignore.
-
-Since only a source file was modified (`Calendar.tsx`), no additional ignore rules are needed beyond what might already exist.
-
-(empty)
