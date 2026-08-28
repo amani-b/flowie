@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { applyThemeToDom, useAppStore } from "./store/appStore";
 import Ambient from "./components/Ambient";
@@ -24,16 +24,15 @@ import { LogoMark } from "./components/icons";
  */
 function OAuthHashHandler() {
   const navigate = useNavigate();
-  const location = useLocation();
 
   useEffect(() => {
     const hash = window.location.hash;
     if (hash && hash.includes("access_token")) {
       // Redirect to /auth/callback to let AuthCallback handle the token
       // Preserve the hash for AuthCallback to parse
-      navigate("/auth/callback" + location.search + hash, { replace: true });
+      navigate("/auth/callback" + window.location.search + hash, { replace: true });
     }
-  }, [navigate, location.search]);
+  }, [navigate]);
 
   return null;
 }
@@ -136,12 +135,12 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      {/* OAuthHashHandler must be outside Routes to run on ALL paths before routing */}
+      <OAuthHashHandler />
       <Routes>
         <Route path="/" element={<AppContent />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/auth" element={<Navigate to="/" replace />} />
-        {/* OAuth hash handler runs on all routes to catch misdirected callbacks */}
-        <Route path="*" element={<OAuthHashHandler />} />
       </Routes>
     </BrowserRouter>
   );
