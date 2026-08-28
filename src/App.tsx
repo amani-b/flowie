@@ -30,8 +30,7 @@ function OAuthHashHandler() {
     if (hash && hash.includes("access_token")) {
       const currentPath = window.location.pathname;
       if (currentPath !== "/auth/callback") {
-        // Use window.location.replace to preserve the hash exactly as-is
-        window.location.replace("/auth/callback" + window.location.search + hash);
+        navigate("/auth/callback" + window.location.search + hash, { replace: true });
       }
     }
   }, [navigate]);
