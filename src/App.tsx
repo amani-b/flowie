@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { applyThemeToDom, useAppStore } from "./store/appStore";
 import Ambient from "./components/Ambient";
@@ -16,6 +16,27 @@ import Studio from "./screens/Studio";
 import Looks from "./screens/Looks";
 import CalendarView from "./screens/Calendar";
 import { LogoMark } from "./components/icons";
+
+/**
+ * OAuthHashHandler detects an OAuth hash (access_token) in the URL
+ * and redirects to /auth/callback to let AuthCallback handle it.
+ * This ensures OAuth callbacks work regardless of which path they land on.
+ */
+function OAuthHashHandler() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash && hash.includes("access_token")) {
+      // Redirect to /auth/callback to let AuthCallback handle the token
+      // Preserve the hash for AuthCallback to parse
+      navigate("/auth/callback" + location.search + hash, { replace: true });
+    }
+  }, [navigate, location.search]);
+
+  return null;
+}
 
 const SCREENS = {
   home: Home,
@@ -119,6 +140,8 @@ export default function App() {
         <Route path="/" element={<AppContent />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/auth" element={<Navigate to="/" replace />} />
+        {/* OAuth hash handler runs on all routes to catch misdirected callbacks */}
+        <Route path="*" element={<OAuthHashHandler />} />
       </Routes>
     </BrowserRouter>
   );
