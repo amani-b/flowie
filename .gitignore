@@ -1,15 +1,6 @@
-```
-# Build artifacts
 dist/
 build/
-*.html
-
-# Dependencies
 node_modules/
-
-# Editors
 .vscode/
-
-# Original rules preserved
-.gitignore
-```
+.env
+.env.local
