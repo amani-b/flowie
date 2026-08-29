@@ -28,9 +28,11 @@ function OAuthHashHandler() {
   useEffect(() => {
     const hash = window.location.hash;
     if (hash && hash.includes("access_token")) {
-      // Redirect to /auth/callback to let AuthCallback handle the token
-      // Preserve the hash for AuthCallback to parse
-      navigate("/auth/callback" + window.location.search + hash, { replace: true });
+      const currentPath = window.location.pathname;
+      if (currentPath !== "/auth/callback") {
+        // Use window.location.replace to preserve the hash exactly as-is
+        window.location.replace("/auth/callback" + window.location.search + hash);
+      }
     }
   }, [navigate]);
 
