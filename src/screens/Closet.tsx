@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Camera, Loader2, Plus, RotateCcw, Search, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { Camera, Check, Loader2, Plus, RotateCcw, Search, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { CATEGORIES } from "../lib/mock";
 import {
@@ -11,13 +11,19 @@ import {
   isLightColor,
   uid,
 } from "../lib/utils";
-import type { Category, Formality, Garment, Warmth } from "../types";
+import type { Category, Formality, Garment, Warmth, ColorFamily, AccessoryKind } from "../types";
 import GarmentCard from "../components/GarmentCard";
 import Sheet from "../components/Sheet";
 import { GarmentGlyph, LogoMark } from "../components/icons";
-import { tagGarmentPhoto, taggingToGarment, geminiReady } from "../services/aiStylistService";
+import { tagGarmentPhoto, taggingToGarment, geminiReady, type TaggingResult } from "../services/aiStylistService";
 
 type Filter = "all" | Category;
+
+interface PendingGarment extends TaggingResult {
+  tempId: string;
+  imageDataUrl?: string;
+  fileName: string;
+}
 
 const SHORT_CAT: Record<Category, string> = {
   top: "Top",
@@ -27,6 +33,307 @@ const SHORT_CAT: Record<Category, string> = {
   shoes: "Shoes",
   accessory: "Extra",
 };
+
+/* ------------------------------ add form ------------------------------ */
+
+/** AI-powered garment upload with confirmation step */
+function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+  const addGarment = useAppStore((s) => s.addGarment);
+  const notify = useAppStore((s) => s.notify);
+
+  const [files, setFiles] = useState<File[]>([]);
+  const [pending, setPending] = useState<PendingGarment[]>([]);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const newFiles = Array.from(fileList).filter((f) => f.type.startsWith("image/"));
+    if (newFiles.length === 0) {
+      notify("Please select image files", "err");
+      return;
+    }
+    setFiles((prev) => [...prev, ...newFiles]);
+  };
+
+  const analyzeFiles = async () => {
+    if (files.length === 0) return;
+    setAnalyzing(true);
+    setProgress(0);
+
+    const results: PendingGarment[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const dataUrl = await compressImage(file);
+        const tags = await tagGarmentPhoto(dataUrl, file.name);
+        results.push({
+          ...tags,
+          tempId: uid("p"),
+          imageDataUrl: dataUrl,
+          fileName: file.name,
+        });
+        setProgress(Math.round(((i + 1) / files.length) * 100));
+      } catch (e) {
+        notify(`Failed to analyze ${file.name}`, "err");
+      }
+    }
+
+    setPending(results);
+    setAnalyzing(false);
+    setFiles([]);
+  };
+
+  const updatePending = (tempId: string, updates: Partial<PendingGarment>) => {
+    setPending((prev) => prev.map((p) => (p.tempId === tempId ? { ...p, ...updates } : p)));
+  };
+
+  const removePending = (tempId: string) => {
+    setPending((prev) => prev.filter((p) => p.tempId !== tempId));
+  };
+
+  const confirmAndSave = () => {
+    pending.forEach((p) => {
+      const garment = taggingToGarment(p, p.imageDataUrl);
+      addGarment(garment);
+    });
+    notify(`${pending.length} item(s) added to closet`);
+    onDone();
+  };
+
+  const validCategories = ["top", "bottom", "dress", "outerwear", "shoes", "accessory"] as Category[];
+  const validFamilies = ["neutral", "warm", "cool", "earth", "accent"] as ColorFamily[];
+
+  if (pending.length > 0) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-display text-[16px] font-extrabold">Review & Confirm</h3>
+          <span className="text-[11px] font-bold text-mut">{pending.length} item(s)</span>
+        </div>
+
+        <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+          {pending.map((p) => (
+            <div key={p.tempId} className="rounded-[16px] border border-line bg-card p-3">
+              <div className="flex gap-3">
+                <div className="h-20 w-20 shrink-0 overflow-hidden rounded-[12px] bg-bgdeep">
+                  {p.imageDataUrl ? (
+                    <img src={p.imageDataUrl} alt={p.name} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center">
+                      <GarmentGlyph category={p.category} kind={undefined} className="h-8 w-8 text-mut" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1 space-y-2">
+                  <input
+                    className="field !py-1.5 !text-[13px]"
+                    value={p.name}
+                    onChange={(e) => updatePending(p.tempId, { name: e.target.value })}
+                    placeholder="Item name"
+                  />
+
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="field !py-1 !text-[11px] !px-2"
+                      value={p.category}
+                      onChange={(e) => updatePending(p.tempId, { category: e.target.value as Category })}
+                    >
+                      {validCategories.map((c) => (
+                        <option key={c} value={c}>
+                          {c.charAt(0).toUpperCase() + c.slice(1)}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      className="field !py-1 !text-[11px] !px-2"
+                      value={p.colorFamily}
+                      onChange={(e) => updatePending(p.tempId, { colorFamily: e.target.value as ColorFamily })}
+                    >
+                      {validFamilies.map((f) => (
+                        <option key={f} value={f}>
+                          {f.charAt(0).toUpperCase() + f.slice(1)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-mut">Warmth:</span>
+                      <div className="flex rounded-[8px] border border-line bg-bgdeep p-0.5">
+                        {([1, 2, 3] as Warmth[]).map((w) => (
+                          <button
+                            key={w}
+                            onClick={() => updatePending(p.tempId, { warmth: w })}
+                            className={cn(
+                              "rounded-[6px] px-1.5 py-0.5 text-[9px] font-extrabold",
+                              p.warmth === w ? "bg-acc text-accink" : "text-mut"
+                            )}
+                          >
+                            {w === 1 ? "L" : w === 2 ? "M" : "W"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-mut">Formality:</span>
+                      <div className="flex rounded-[8px] border border-line bg-bgdeep p-0.5">
+                        {([1, 2, 3] as Formality[]).map((f) => (
+                          <button
+                            key={f}
+                            onClick={() => updatePending(p.tempId, { formality: f })}
+                            className={cn(
+                              "rounded-[6px] px-1.5 py-0.5 text-[9px] font-extrabold",
+                              p.formality === f ? "bg-acc text-accink" : "text-mut"
+                            )}
+                          >
+                            {f === 1 ? "C" : f === 2 ? "S" : "F"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => removePending(p.tempId)}
+                      className="rounded-full p-1 text-mut hover:bg-dangersoft hover:text-danger"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex gap-2 pt-2">
+          <button
+            onClick={onCancel}
+            className="flex-1 rounded-[16px] border border-line py-3 text-[13.5px] font-extrabold text-mut transition active:scale-[0.98]"
+          >
+            Discard
+          </button>
+          <button
+            onClick={confirmAndSave}
+            className="flex-1 rounded-[16px] bg-acc py-3 font-display text-[15px] font-extrabold text-accink transition active:scale-[0.98]"
+          >
+            Save {pending.length} Item{pending.length > 1 ? "s" : ""}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <label className="label-micro mb-1.5 block">Upload Photos</label>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => handleFileSelect(e.target.files)}
+        />
+        {files.length > 0 ? (
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              {files.map((f, i) => (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-card px-2.5 py-1 text-[10.5px] font-medium"
+                >
+                  {f.name.length > 20 ? f.name.slice(0, 20) + "…" : f.name}
+                  <button
+                    onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                    className="text-mut hover:text-danger"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="text-[11.5px] font-extrabold text-acc underline-offset-2 hover:underline"
+            >
+              + Add more photos
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="flex w-full flex-col items-center justify-center gap-2 rounded-[16px] border-2 border-dashed border-linestrong py-8 text-[12.5px] font-medium text-mut transition hover:border-acc hover:text-acc active:scale-[0.98]"
+          >
+            <Camera className="h-6 w-6" />
+            <span>Click to select photos · Single or bulk upload</span>
+            <span className="text-[10.5px] text-mut">Auto-compressed to ~500KB each</span>
+          </button>
+        )}
+      </div>
+
+      {analyzing && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="label-micro">AI analyzing…</span>
+            <span className="text-[10px] font-bold text-mut">{progress}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-bgdeep">
+            <motion.div
+              className="h-full bg-acc"
+              initial={{ width: 0 }}
+              animate={{ width: `${progress}%` }}
+              transition={{ ease: "easeOut" }}
+            />
+          </div>
+          <p className="text-[11px] text-mut">Using Gemini 2.5 Flash for smart tagging…</p>
+        </div>
+      )}
+
+      <div className="flex gap-2 pt-2">
+        <button
+          onClick={onCancel}
+          disabled={analyzing || files.length === 0}
+          className="flex-1 rounded-[16px] border border-line py-3 text-[13.5px] font-extrabold text-mut transition active:scale-[0.98] disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={analyzeFiles}
+          disabled={analyzing || files.length === 0}
+          className="flex flex-1 items-center justify-center gap-2 rounded-[16px] bg-acc py-3 font-display text-[15px] font-extrabold text-accink transition active:scale-[0.98] disabled:opacity-50"
+        >
+          {analyzing ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" /> Analyzing…
+            </>
+          ) : (
+            <>
+              <Sparkles className="h-4 w-4" /> Auto-Tag {files.length > 0 ? `(${files.length})` : ""}
+            </>
+          )}
+        </button>
+      </div>
+
+      {!geminiReady && files.length === 0 && (
+        <div className="rounded-[14px] border border-acc/30 bg-accsoft/50 p-3">
+          <p className="text-[11px] font-medium leading-relaxed text-mut">
+            <span className="font-extrabold text-acc">Note:</span> No Gemini API key configured.
+            Using client-side heuristic tagging (filename-based guesses). Add{" "}
+            <code className="rounded bg-card px-1 py-0.5 text-[10px]">VITE_GEMINI_API_KEY</code> to your .env for AI tagging.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ------------------------------ add form ------------------------------ */
 
@@ -451,8 +758,11 @@ export default function Closet() {
       </motion.button>
 
       <Sheet open={addOpen} onClose={() => setAddOpen(false)} title="Add a piece">
-        <AddForm
+        <AIUploadForm
           onDone={() => {
+            setAddOpen(false);
+          }}
+          onCancel={() => {
             setAddOpen(false);
           }}
         />
