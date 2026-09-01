@@ -87,14 +87,14 @@ function guessFormality(text: string): Formality {
 export function tagGarmentHeuristic(file: File): Promise<TaggingResult> {
   return new Promise((resolve) => {
     // Use filename and basic file metadata for educated guesses
-    const name = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
+    const safeName = (file.name ?? "Untitled piece").replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
     setTimeout(() => {
       resolve({
-        name: name || "Untitled piece",
-        category: guessCategory(name),
-        ...guessColor(name),
-        warmth: guessWarmth(name),
-        formality: guessFormality(name),
+        name: safeName || "Untitled piece",
+        category: guessCategory(safeName),
+        ...guessColor(safeName),
+        warmth: guessWarmth(safeName),
+        formality: guessFormality(safeName),
         tags: [],
         confidence: 0.6,
       });
