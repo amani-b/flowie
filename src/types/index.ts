@@ -37,7 +37,7 @@ export interface Garment {
   createdAt: number;
 }
 
-export type Occasion = "casual" | "work" | "date" | "gym" | "party" | "formal" | "travel";
+export type Occasion = "casual" | "work" | "date" | "gym" | "party";
 
 export type TempBucket = "cold" | "cool" | "mild" | "warm" | "hot";
 

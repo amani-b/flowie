@@ -2,81 +2,55 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* ---------- Theme tokens (warm espresso palette) ---------- */
+/* ---------- Theme tokens (flip with .dark on <html>) ---------- */
 :root {
-  /* Background & surfaces - warm espresso tones */
-  --bg: #211A16;
-  --bg-deep: #1A1411;
-  --surface: rgba(43, 34, 28, 0.92);
-  --surface-solid: #2B221C;
-  --surface-elevated: #332821;
-  
-  /* Text - ivory to taupe range */
-  --ink: #F5ECE1;
-  --muted: #B9A896;
-  --faint: #7E6F60;
-  
-  /* Borders - hairline only */
-  --line: rgba(245, 236, 225, 0.08);
-  --line-strong: rgba(245, 236, 225, 0.15);
-  
-  /* Primary accent - honey gold (ONLY saturated interactive color) */
-  --acc: #E3A75B;
-  --acc-deep: #C98A3E;
-  --acc-soft: rgba(227, 167, 91, 0.12);
-  --acc-ink: #211A16;
-  
-  /* Secondary/positive - sage (filled/ready states ONLY) */
-  --sage: #93A67C;
-  --sage-soft: rgba(147, 166, 124, 0.12);
-  
-  /* Tertiary - dusty rose (decorative ONLY, never interactive) */
-  --rose: #C68A6D;
-  --rose-soft: rgba(198, 138, 109, 0.10);
-  
-  /* Error state */
-  --danger: #CF5F5F;
-  --danger-soft: rgba(207, 95, 95, 0.12);
-  
-  /* Mannequin figure */
-  --mannequin: #5C4A3F;
-  --mannequin-shade: #4A3A30;
-  
-  /* Ambient glow */
-  --glow-a: rgba(227, 167, 91, 0.08);
-  --glow-b: rgba(198, 138, 109, 0.06);
-  
-  /* Shadows */
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -16px rgba(0, 0, 0, 0.4);
+  --bg: #edf1ec;
+  --bg-deep: #e3e9e2;
+  --surface: rgba(255, 255, 255, 0.62);
+  --surface-solid: #fdfdfb;
+  --ink: #131a15;
+  --muted: #5d6b61;
+  --line: rgba(19, 26, 21, 0.1);
+  --line-strong: rgba(19, 26, 21, 0.18);
+  --acc: #0c9d6c;
+  --acc-soft: rgba(12, 157, 108, 0.12);
+  --acc-ink: #f2fbf6;
+  --amber: #c97a00;
+  --amber-soft: rgba(201, 122, 0, 0.14);
+  --cool: #1f7fa8;
+  --cool-soft: rgba(31, 127, 168, 0.12);
+  --danger: #cf3f4c;
+  --danger-soft: rgba(207, 63, 76, 0.12);
+  --mannequin: #c8d0ca;
+  --mannequin-shade: #b3bcb5;
+  --glow-a: rgba(12, 157, 108, 0.17);
+  --glow-b: rgba(201, 122, 0, 0.14);
+  --shadow-card: 0 1px 2px rgba(19, 26, 21, 0.05), 0 12px 32px -16px rgba(19, 26, 21, 0.22);
 }
 
-/* Light mode (fallback, not primary) */
-.light {
-  --bg: #FDFBF9;
-  --bg-deep: #F7F4F0;
-  --surface: rgba(255, 255, 255, 0.75);
-  --surface-solid: #FFFFFF;
-  --surface-elevated: #F9F6F2;
-  --ink: #2B221C;
-  --muted: #8B7D6B;
-  --faint: #B9A896;
-  --line: rgba(33, 26, 22, 0.08);
-  --line-strong: rgba(33, 26, 22, 0.15);
-  --acc: #C98A3E;
-  --acc-deep: #A87232;
-  --acc-soft: rgba(201, 138, 62, 0.12);
-  --acc-ink: #FDFBF9;
-  --sage: #6B7F5A;
-  --sage-soft: rgba(107, 127, 90, 0.12);
-  --rose: #C68A6D;
-  --rose-soft: rgba(198, 138, 109, 0.10);
-  --danger: #CF5F5F;
-  --danger-soft: rgba(207, 95, 95, 0.12);
-  --mannequin: #C8B8A8;
-  --mannequin-shade: #B0A090;
-  --glow-a: rgba(201, 138, 62, 0.10);
-  --glow-b: rgba(198, 138, 109, 0.08);
-  --shadow-card: 0 1px 2px rgba(33, 26, 22, 0.04), 0 8px 24px -12px rgba(33, 26, 22, 0.15);
+.dark {
+  --bg: #0c110d;
+  --bg-deep: #0a0e0b;
+  --surface: rgba(23, 31, 26, 0.58);
+  --surface-solid: #141b16;
+  --ink: #e9f0e9;
+  --muted: #90a095;
+  --line: rgba(233, 240, 233, 0.1);
+  --line-strong: rgba(233, 240, 233, 0.18);
+  --acc: #3ddc97;
+  --acc-soft: rgba(61, 220, 151, 0.13);
+  --acc-ink: #06281a;
+  --amber: #ffb84d;
+  --amber-soft: rgba(255, 184, 77, 0.13);
+  --cool: #6cc3e8;
+  --cool-soft: rgba(108, 195, 232, 0.12);
+  --danger: #ff7b84;
+  --danger-soft: rgba(255, 123, 132, 0.14);
+  --mannequin: #3e4a42;
+  --mannequin-shade: #333d36;
+  --glow-a: rgba(61, 220, 151, 0.12);
+  --glow-b: rgba(255, 184, 77, 0.09);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 40px -18px rgba(0, 0, 0, 0.55);
 }
 
 /* ---------- Map tokens into Tailwind utilities ---------- */
@@ -84,24 +58,21 @@
   --color-bg: var(--bg);
   --color-bgdeep: var(--bg-deep);
   --color-card: var(--surface-solid);
-  --color-surface: var(--surface-elevated);
   --color-ink: var(--ink);
   --color-mut: var(--muted);
-  --color-faint: var(--faint);
   --color-line: var(--line);
   --color-linestrong: var(--line-strong);
   --color-acc: var(--acc);
-  --color-accdeep: var(--acc-deep);
   --color-accsoft: var(--acc-soft);
   --color-accink: var(--acc-ink);
-  --color-sage: var(--sage);
-  --color-sagesoft: var(--sage-soft);
-  --color-rose: var(--rose);
-  --color-rosesoft: var(--rose-soft);
+  --color-amber: var(--amber);
+  --color-ambersoft: var(--amber-soft);
+  --color-cool: var(--cool);
+  --color-coolsoft: var(--cool-soft);
   --color-danger: var(--danger);
   --color-dangersoft: var(--danger-soft);
-  --font-display: "Fraunces", ui-serif, Georgia, serif;
-  --font-sans: "Plus Jakarta Sans", ui-rounded, system-ui, sans-serif;
+  --font-display: "Syne", "Manrope", sans-serif;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
 }
 
 html,
