@@ -27,7 +27,14 @@ export const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 /* ----------------------------- colors ----------------------------- */
 
+const DEFAULT_HEX = "#6B7280";
+const HEX_REGEX = /^#?[0-9a-f]{3}$|^#?[0-9a-f]{6}$/i;
+
 export function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  // Defensive: fall back to default gray if hex is falsy or invalid
+  if (!hex || !HEX_REGEX.test(hex)) {
+    hex = DEFAULT_HEX;
+  }
   const h = hex.replace("#", "");
   const full =
     h.length === 3 ? h.split("").map((c) => c + c).join("") : h.padEnd(6, "0");
