@@ -129,9 +129,10 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                 </div>
 
                 <div className="min-w-0 flex-1 space-y-2">
-                  <div className="flex items-start justify-between gap-2">
+                  {/* Name + remove button: allow wrap on narrow screens */}
+                  <div className="flex flex-wrap items-start gap-2">
                     <input
-                      className="field !py-1.5 !text-[13px] flex-1"
+                      className="field !py-1.5 !text-[13px] min-w-[140px] flex-1"
                       value={p.name}
                       onChange={(e) => updatePending(p.tempId, { name: e.target.value })}
                       placeholder="Item name"
@@ -145,9 +146,10 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                     </button>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
+                  {/* Category + color family: stack on mobile, row on desktop */}
+                  <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                     <select
-                      className="field !py-1 !text-[11px] !px-2"
+                      className="field !py-1 !text-[11px] !px-2 w-full sm:w-auto"
                       value={p.category}
                       onChange={(e) => updatePending(p.tempId, { category: e.target.value as Category })}
                     >
@@ -159,7 +161,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                     </select>
 
                     <select
-                      className="field !py-1 !text-[11px] !px-2"
+                      className="field !py-1 !text-[11px] !px-2 w-full sm:w-auto"
                       value={p.colorFamily}
                       onChange={(e) => updatePending(p.tempId, { colorFamily: e.target.value as ColorFamily })}
                     >
@@ -171,7 +173,8 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                     </select>
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-2">
+                  {/* Warmth + formality: stack vertically on mobile */}
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] font-bold text-mut">Warmth:</span>
                       <div className="flex rounded-[8px] border border-line bg-bgdeep p-0.5">

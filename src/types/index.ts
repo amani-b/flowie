@@ -4,7 +4,7 @@
 
 export type ThemeMode = "light" | "dark";
 export type Units = "C" | "F";
-export type TabId = "home" | "closet" | "studio" | "looks";
+export type TabId = "home" | "closet" | "studio" | "looks" | "calendar";
 
 export type Category =
   | "top"
