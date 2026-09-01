@@ -16,7 +16,7 @@ import { uid } from "../lib/utils";
 const GEMINI_KEY = (import.meta.env.VITE_GEMINI_API_KEY ?? "").trim();
 export const geminiReady = GEMINI_KEY.length > 0;
 
-interface TaggingResult {
+export interface TaggingResult {
   name: string;
   category: Category;
   colorHex: string;
@@ -88,11 +88,13 @@ export function tagGarmentHeuristic(file: File): Promise<TaggingResult> {
   return new Promise((resolve) => {
     // Use filename and basic file metadata for educated guesses
     const safeName = (file.name ?? "Untitled piece").replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
+    const colorInfo = guessColor(safeName);
     setTimeout(() => {
       resolve({
         name: safeName || "Untitled piece",
         category: guessCategory(safeName),
-        ...guessColor(safeName),
+        colorHex: colorInfo.hex,
+        colorFamily: colorInfo.family,
         warmth: guessWarmth(safeName),
         formality: guessFormality(safeName),
         tags: [],
