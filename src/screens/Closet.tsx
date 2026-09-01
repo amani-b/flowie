@@ -129,14 +129,23 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                 </div>
 
                 <div className="min-w-0 flex-1 space-y-2">
-                  <input
-                    className="field !py-1.5 !text-[13px]"
-                    value={p.name}
-                    onChange={(e) => updatePending(p.tempId, { name: e.target.value })}
-                    placeholder="Item name"
-                  />
+                  <div className="flex items-start justify-between gap-2">
+                    <input
+                      className="field !py-1.5 !text-[13px] flex-1"
+                      value={p.name}
+                      onChange={(e) => updatePending(p.tempId, { name: e.target.value })}
+                      placeholder="Item name"
+                    />
+                    <button
+                      onClick={() => removePending(p.tempId)}
+                      className="shrink-0 rounded-full p-1.5 text-mut hover:bg-dangersoft hover:text-danger"
+                      aria-label="Remove item"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <select
                       className="field !py-1 !text-[11px] !px-2"
                       value={p.category}
@@ -162,7 +171,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                     </select>
                   </div>
 
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] font-bold text-mut">Warmth:</span>
                       <div className="flex rounded-[8px] border border-line bg-bgdeep p-0.5">
@@ -198,13 +207,6 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                         ))}
                       </div>
                     </div>
-
-                    <button
-                      onClick={() => removePending(p.tempId)}
-                      className="rounded-full p-1 text-mut hover:bg-dangersoft hover:text-danger"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
                   </div>
                 </div>
               </div>
