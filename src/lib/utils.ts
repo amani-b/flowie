@@ -107,8 +107,6 @@ export const OCCASION_META: Record<Occasion, { label: string; blurb: string }> =
   date: { label: "Date", blurb: "A little intention goes far" },
   gym: { label: "Gym", blurb: "Sweat first, style second" },
   party: { label: "Party", blurb: "Low lights, high stakes" },
-  formal: { label: "Formal", blurb: "Black tie, white shirt, no shortcuts" },
-  travel: { label: "Travel", blurb: "Long-haul comfort with layover polish" },
 };
 
 /* ------------------------- color swatches ------------------------- */
