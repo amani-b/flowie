@@ -313,10 +313,12 @@ export const useAppStore = create<AppStore>()(
         }
       },
       removeGarment: (id) => {
-        set((s) => ({ garments: s.garments.filter((g) => g.id !== id) }));
         const user = get().user;
+        // Get userId for storage cleanup before removing from state
+        const userId = user?.id;
+        set((s) => ({ garments: s.garments.filter((g) => g.id !== id) }));
         if (user && !user.isDemo && !id.startsWith("g-")) {
-          void deleteGarmentRow(id).catch(() => {});
+          void deleteGarmentRow(id, userId ?? "").catch(() => {});
         }
       },
       restoreSamples: () => {
