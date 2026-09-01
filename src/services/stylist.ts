@@ -23,6 +23,8 @@ const TARGET_FORMALITY: Record<Occasion, number> = {
   date: 2,
   party: 2,
   work: 3,
+  formal: 3,
+  travel: 2,
 };
 
 const HARMONY: Record<ColorFamily, Record<ColorFamily, number>> = {
