@@ -274,7 +274,7 @@ export const useAppStore = create<AppStore>()(
       setProfile: (p) => set({ profile: p }),
 
       /* ---------------------------- shell ----------------------------- */
-      theme: "light", // default to light mode (warm espresso palette is the default)
+      theme: "dark",
       units: "C",
       tab: "home",
       drawerOpen: false,
