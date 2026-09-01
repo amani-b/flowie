@@ -2,13 +2,4 @@
 # Build artifacts
 dist/
 build/
-# Dependencies
-node_modules/
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-# Editors
-.vscode/
-.idea/
 ```
