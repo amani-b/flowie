@@ -1,4 +1,4 @@
-import { supabase } from "./supabaseClient";
+import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import type { Database } from "../types/database";
 import type {
   AccessoryKind,
@@ -34,6 +34,43 @@ const clampWarmth = (n: number): Warmth =>
   n <= 1 ? 1 : n >= 3 ? 3 : 2;
 const clampFormality = (n: number): Formality =>
   n <= 1 ? 1 : n >= 3 ? 3 : 2;
+
+/**
+ * Upload a garment photo to Supabase Storage (wardrobe bucket).
+ * Returns the public URL for storage in wardrobe_items.image_url.
+ * Only used in live mode (isSupabaseConfigured === true).
+ */
+async function uploadGarmentPhoto(
+  userId: string,
+  garmentId: string,
+  dataUrl: string
+): Promise<string> {
+  if (!supabase) {
+    throw new Error("Supabase not configured");
+  }
+
+  // Convert base64 data URL to Blob
+  const blob = await fetch(dataUrl).then((r) => r.blob());
+
+  // Path format: userId/garmentId.jpg - first segment must be userId for RLS
+  const path = `${userId}/${garmentId}.jpg`;
+
+  // Upload with upsert to handle re-saves
+  const { error: uploadError } = await supabase.storage
+    .from("wardrobe")
+    .upload(path, blob, { upsert: true, contentType: "image/jpeg" });
+
+  if (uploadError) {
+    throw uploadError;
+  }
+
+  // Get public URL
+  const { data: urlData } = supabase.storage
+    .from("wardrobe")
+    .getPublicUrl(path);
+
+  return urlData.publicUrl;
+}
 
 /* ---------------------------- row → model --------------------------- */
 
@@ -159,17 +196,45 @@ export async function insertGarmentRow(
   g: Garment
 ): Promise<string | null> {
   if (!supabase) return null;
+
+  let imageUrl: string | null = g.photo ?? null;
+
+  // If photo is a base64 data URL and Supabase is configured, upload to Storage
+  if (g.photo && g.photo.startsWith("data:") && isSupabaseConfigured) {
+    try {
+      const storageUrl = await uploadGarmentPhoto(userId, g.id, g.photo);
+      imageUrl = storageUrl;
+    } catch (uploadErr) {
+      // Fall back to storing base64 inline if upload fails
+      console.error("Failed to upload garment photo to Storage:", uploadErr);
+      // imageUrl stays as the original base64 data URL
+    }
+  }
+
   const { data, error } = await supabase
     .from("wardrobe_items")
-    .insert(garmentToInsert(userId, g))
+    .insert({
+      ...garmentToInsert(userId, g),
+      image_url: imageUrl,
+    })
     .select("id")
     .single();
   if (error) throw new Error(error.message);
   return (data as { id: string } | null)?.id ?? null;
 }
 
-export async function deleteGarmentRow(id: string): Promise<void> {
+export async function deleteGarmentRow(id: string, userId: string): Promise<void> {
   if (!supabase) return;
+
+  // Best-effort: delete the corresponding Storage object
+  try {
+    const path = `${userId}/${id}.jpg`;
+    await supabase.storage.from("wardrobe").remove([path]);
+  } catch (storageErr) {
+    // Don't fail the whole delete if storage removal errors
+    console.warn("Could not delete garment photo from Storage:", storageErr);
+  }
+
   const { error } = await supabase.from("wardrobe_items").delete().eq("id", id);
   if (error) throw new Error(error.message);
 }
