@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, createJSONStorage } from "zustand/middleware";
 import type {
   AppMode,
   AuthStatus,
@@ -109,6 +109,35 @@ const EMPTY_DATA = {
   looks: [] as SavedLook[],
   today: null as StyleResult | null,
   generation: IDLE_GEN,
+};
+
+// Safe storage wrapper that catches localStorage quota errors
+const safeStorage = {
+  getItem: (name: string) => {
+    try {
+      const item = localStorage.getItem(name);
+      return item ? JSON.parse(item) : null;
+    } catch (e) {
+      console.warn(`localStorage.getItem("${name}") failed:`, e);
+      return null;
+    }
+  },
+  setItem: (name: string, value: { state: unknown; version?: number }) => {
+    try {
+      localStorage.setItem(name, JSON.stringify(value));
+    } catch (e) {
+      // QuotaExceededError or other storage failure — degrade gracefully
+      console.error("localStorage.setItem failed — storage may be full:", e);
+      // Don't rethrow; let the app continue working in-memory
+    }
+  },
+  removeItem: (name: string) => {
+    try {
+      localStorage.removeItem(name);
+    } catch (e) {
+      console.warn(`localStorage.removeItem("${name}") failed:`, e);
+    }
+  },
 };
 
 export function applyThemeToDom(theme: ThemeMode) {
@@ -387,6 +416,7 @@ export const useAppStore = create<AppStore>()(
     {
       name: "fitflow-store",
       version: 2,
+      storage: safeStorage,
       migrate: (persisted, version) => {
         // v1 (Phase 0) → v2: keep user data, add new session fields.
         const state = (persisted ?? {}) as Record<string, unknown>;
@@ -403,7 +433,7 @@ export const useAppStore = create<AppStore>()(
       partialize: (s) => ({
         theme: s.theme,
         units: s.units,
-        garments: s.garments,
+        garments: s.garments.map((g) => ({ ...g, photo: undefined })), // omit base64 photos from localStorage
         looks: s.looks,
         today: s.today,
         ownerId: s.ownerId,
