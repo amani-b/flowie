@@ -67,6 +67,14 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-generate today's outfit on first load if we have garments but no outfit yet
+  useEffect(() => {
+    if (garments.length > 0 && !today && weather.status !== "loading") {
+      void generateToday("casual");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [garments.length, today, weather.status]);
+
   const wx = weather.data;
   const WxIcon = wx ? WX_ICON[wx.icon] : Sun;
   const todayPieces = today ? outfitPieces(today.outfit as Record<string, Garment | undefined>) : [];
