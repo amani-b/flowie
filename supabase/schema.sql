@@ -87,7 +87,10 @@ create table if not exists public.wardrobe_items (
   image_url       text,                                  -- Storage object URL (bucket: wardrobe)
   category        text not null check (category in
                     ('top', 'bottom', 'dress', 'outerwear', 'shoes', 'accessory')),
-  color           text not null,                         -- hex, e.g. '#3A4A63'
+  color           text not null,                         -- hex, e.g. '#3A4A63' (primary/dominant)
+  colors          text[] not null default '{}',          -- Array of hex values, ordered by prominence
+  pattern         text not null default 'solid' check (pattern in
+                    ('solid', 'striped', 'colorblock', 'other')),
   color_family    text not null default 'neutral' check (color_family in
                     ('neutral', 'warm', 'cool', 'earth', 'accent')),
   warmth          int  not null default 2 check (warmth between 1 and 3),

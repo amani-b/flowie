@@ -3,6 +3,63 @@ import type { Garment } from "../types";
 import { darken, isLightColor } from "../lib/utils";
 import { GarmentGlyph } from "./icons";
 
+/** Render a color swatch that supports multi-color garments */
+function renderSwatch(garment: Garment): React.CSSProperties {
+  // Single color or solid pattern: use simple gradient as before
+  if (garment.colors.length === 1 || garment.pattern === "solid") {
+    return {
+      background: `linear-gradient(160deg, ${garment.color} 0%, ${darken(garment.color, 0.22)} 100%)`,
+    };
+  }
+
+  // Multi-color garments: create pattern-based backgrounds
+  const [c1, c2, c3] = garment.colors;
+
+  if (garment.pattern === "striped") {
+    // Diagonal stripes for striped patterns
+    return {
+      backgroundImage: `repeating-linear-gradient(
+        45deg,
+        ${c1},
+        ${c1} 8px,
+        ${c2 || c1} 8px,
+        ${c2 || c1} 16px
+      )`,
+    };
+  }
+
+  if (garment.pattern === "colorblock") {
+    // Hard-stop horizontal blocks for colorblock
+    if (c3) {
+      return {
+        backgroundImage: `linear-gradient(
+          to bottom,
+          ${c1} 0%, ${c1} 33%,
+          ${c2} 33%, ${c2} 66%,
+          ${c3} 66%, ${c3} 100%
+        )`,
+      };
+    }
+    return {
+      backgroundImage: `linear-gradient(
+        to bottom,
+        ${c1} 0%, ${c1} 50%,
+        ${c2} 50%, ${c2} 100%
+      )`,
+    };
+  }
+
+  // For 'other' pattern, use a soft gradient across all colors
+  if (c3) {
+    return {
+      background: `linear-gradient(160deg, ${c1} 0%, ${c2} 50%, ${c3} 100%)`,
+    };
+  }
+  return {
+    background: `linear-gradient(160deg, ${c1} 0%, ${c2 || c1} 100%)`,
+  };
+}
+
 export default function GarmentCard({
   garment,
   onOpen,
@@ -12,6 +69,7 @@ export default function GarmentCard({
 }) {
   const light = isLightColor(garment.color);
   const glyphColor = light ? darken(garment.color, 0.55) : "#F7F6F2";
+  const swatchStyle = renderSwatch(garment);
 
   return (
     <motion.button
@@ -26,9 +84,7 @@ export default function GarmentCard({
     >
       <div
         className="relative flex aspect-[4/5] items-center justify-center"
-        style={{
-          background: `linear-gradient(160deg, ${garment.color} 0%, ${darken(garment.color, 0.22)} 100%)`,
-        }}
+        style={swatchStyle}
       >
         {garment.photo ? (
           <img

@@ -16,6 +16,7 @@ import Studio from "./screens/Studio";
 import Looks from "./screens/Looks";
 import CalendarView from "./screens/Calendar";
 import { LogoMark } from "./components/icons";
+import { supabase } from "./services/supabaseClient";
 
 /**
  * OAuthHashHandler detects an OAuth hash (access_token) in the URL
@@ -34,6 +35,44 @@ function OAuthHashHandler() {
       }
     }
   }, [navigate]);
+
+  return null;
+}
+
+/**
+ * VisibilityChangeHandler manages Supabase auth token refresh based on tab visibility.
+ * When the tab is backgrounded (e.g., app switched away, phone locked), we stop
+ * auto-refresh to avoid stale tokens. When visible again, we restart it.
+ * This prevents cloud sync failures after the app has been backgrounded.
+ */
+function VisibilityChangeHandler() {
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!supabase) return; // Guard for mock mode
+
+      if (document.visibilityState === "visible") {
+        supabase.auth.startAutoRefresh();
+      } else {
+        supabase.auth.stopAutoRefresh();
+      }
+    };
+
+    // Add event listener
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // Initialize based on current visibility state
+    if (document.visibilityState === "visible") {
+      supabase?.auth.startAutoRefresh();
+    } else {
+      supabase?.auth.stopAutoRefresh();
+    }
+
+    // Clean up
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      supabase?.auth.stopAutoRefresh();
+    };
+  }, []);
 
   return null;
 }
@@ -138,6 +177,8 @@ export default function App() {
     <BrowserRouter>
       {/* OAuthHashHandler must be outside Routes to run on ALL paths before routing */}
       <OAuthHashHandler />
+      {/* VisibilityChangeHandler manages Supabase token refresh for backgrounded tabs */}
+      <VisibilityChangeHandler />
       <Routes>
         <Route path="/" element={<AppContent />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
