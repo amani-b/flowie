@@ -1,5 +1,5 @@
 import type { Garment, Category, ColorFamily, Warmth, Formality } from "../types";
-import { uid } from "../lib/utils";
+import { uid, hexToRgb } from "../lib/utils";
 
 /**
  * AI-powered garment tagging service using Gemini 2.5 Flash.
@@ -70,7 +70,50 @@ function guessColor(text: string): { hex: string; family: ColorFamily } {
   return { hex: "#6B7280", family: "neutral" }; // default gray
 }
 
-/** Extract dominant colors from an image using canvas sampling. */
+/**
+ * Classify a hex color into one of the app's color families using HSL.
+ * Used so a photo-uploaded garment's family reflects its real sampled
+ * color instead of a filename guess (which is often just "IMG_1234").
+ */
+function classifyColorFamily(hex: string): ColorFamily {
+  const { r, g, b } = hexToRgb(hex);
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+
+  // Very low saturation, or near-black/near-white: neutral.
+  if (s < 0.12 || l < 0.12 || l > 0.92) return "neutral";
+
+  let h = 0;
+  if (max === rn) h = ((gn - bn) / d) % 6;
+  else if (max === gn) h = (bn - rn) / d + 2;
+  else h = (rn - gn) / d + 4;
+  h *= 60;
+  if (h < 0) h += 360;
+
+  // Muted/darker warm hues read as earth tones (olive, khaki, camel,
+  // espresso) rather than a bright accent or saturated warm color.
+  if (h >= 25 && h < 75 && (s < 0.45 || l < 0.4)) return "earth";
+  if (h >= 190 && h < 260) return "cool";
+  if (h >= 75 && h < 190) return "accent"; // greens / teals
+  if (h >= 300 || h < 20) return s > 0.5 && l > 0.55 ? "accent" : "warm"; // pink vs red/burgundy
+  return "warm"; // remaining oranges / rust
+}
+
+type RGB = { r: number; g: number; b: number };
+
+const rgbDist = (a: RGB, b: RGB) =>
+  Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2);
+
+const clampByte = (v: number) => Math.min(255, Math.max(0, v));
+
+const rgbToHex = (c: RGB) =>
+  `#${[c.r, c.g, c.b].map((v) => clampByte(Math.round(v)).toString(16).padStart(2, "0")).join("")}`;
+
+/** Extract dominant colors (and a rough pattern) from an image using canvas sampling. */
 async function extractColorsFromImage(imageDataUrl: string): Promise<{ colors: string[]; pattern: TaggingResult["pattern"] }> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -84,61 +127,130 @@ async function extractColorsFromImage(imageDataUrl: string): Promise<{ colors: s
       // Downscale for performance
       const maxDim = 64;
       const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-      canvas.width = Math.max(1, Math.round(img.width * scale));
-      canvas.height = Math.max(1, Math.round(img.height * scale));
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      canvas.width = w;
+      canvas.height = h;
+      // Flatten onto white in case any transparency survived upstream —
+      // keeps a stray alpha channel from ever reading as black.
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
 
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, w, h);
       const pixels = imageData.data;
+      const pixelAt = (x: number, y: number): RGB => {
+        const i = (y * w + x) * 4;
+        return { r: pixels[i], g: pixels[i + 1], b: pixels[i + 2] };
+      };
 
-      // Simple color quantization: bucket pixels into color bins
-      const colorBins = new Map<string, number>();
-      const skipThreshold = 245; // Skip very light/white pixels
+      // Estimate the backdrop from the border pixels: garment photos are
+      // typically shot centered on a plain backdrop (white, gray, etc.), so
+      // the frame edge is a reasonable proxy for "not the garment" — a lot
+      // more reliable than assuming the backdrop is always white.
+      const border: RGB[] = [];
+      const xStep = Math.max(1, Math.floor(w / 12));
+      const yStep = Math.max(1, Math.floor(h / 12));
+      for (let x = 0; x < w; x += xStep) {
+        border.push(pixelAt(x, 0));
+        border.push(pixelAt(x, h - 1));
+      }
+      for (let y = 0; y < h; y += yStep) {
+        border.push(pixelAt(0, y));
+        border.push(pixelAt(w - 1, y));
+      }
+
+      let backdrop: RGB | null = null;
+      if (border.length > 0) {
+        const sum = border.reduce(
+          (acc, p) => ({ r: acc.r + p.r, g: acc.g + p.g, b: acc.b + p.b }),
+          { r: 0, g: 0, b: 0 }
+        );
+        const mean: RGB = { r: sum.r / border.length, g: sum.g / border.length, b: sum.b / border.length };
+        const agree = border.filter((p) => rgbDist(p, mean) < 40).length;
+        // Only trust this as a real backdrop if most border samples agree —
+        // otherwise the garment likely fills the frame and there's nothing
+        // to subtract (subtracting a "backdrop" here would eat the garment).
+        if (agree / border.length > 0.6) backdrop = mean;
+      }
+
+      // Quantize pixels into color bins, skipping backdrop and transparent
+      // pixels. Bins keep a running average so the final hex reflects the
+      // true sampled color, not just the bucket floor.
+      const bucket = 28;
+      const bins = new Map<string, { r: number; g: number; b: number; count: number }>();
 
       for (let i = 0; i < pixels.length; i += 4) {
         const r = pixels[i];
         const g = pixels[i + 1];
         const b = pixels[i + 2];
         const a = pixels[i + 3];
+        if (a < 128) continue;
 
-        // Skip transparent or near-white pixels
-        if (a < 128 || (r > skipThreshold && g > skipThreshold && b > skipThreshold)) continue;
+        const px: RGB = { r, g, b };
+        if (backdrop && rgbDist(px, backdrop) < 42) continue;
+        // Safety net when no clear backdrop was detected: pure white
+        // studio blowout right at the edge of exposure is still almost
+        // never the garment itself.
+        if (!backdrop && r > 250 && g > 250 && b > 250) continue;
 
-        // Quantize to reduce color space (bucket similar colors)
-        const qr = Math.floor(r / 32) * 32;
-        const qg = Math.floor(g / 32) * 32;
-        const qb = Math.floor(b / 32) * 32;
-        const key = `${qr},${qg},${qb}`;
-
-        colorBins.set(key, (colorBins.get(key) ?? 0) + 1);
+        const key = `${Math.floor(r / bucket)},${Math.floor(g / bucket)},${Math.floor(b / bucket)}`;
+        const existing = bins.get(key);
+        if (existing) {
+          existing.r += r;
+          existing.g += g;
+          existing.b += b;
+          existing.count += 1;
+        } else {
+          bins.set(key, { r, g, b, count: 1 });
+        }
       }
 
-      // Sort by frequency and take top 3
-      const sorted = Array.from(colorBins.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3);
-
-      if (sorted.length === 0) {
+      if (bins.size === 0) {
         resolve({ colors: ["#6B7280"], pattern: "solid" });
         return;
       }
 
-      const rgbToHex = (r: number, g: number, b: number) =>
-        `#${[r, g, b].map((v) => Math.min(255, v).toString(16).padStart(2, "0")).join("")}`;
+      const rawBins = Array.from(bins.values()).map((v) => ({
+        r: v.r / v.count,
+        g: v.g / v.count,
+        b: v.b / v.count,
+        count: v.count,
+      }));
+      rawBins.sort((a, b) => b.count - a.count);
 
-      const colors = sorted.map(([key]) => {
-        const [r, g, b] = key.split(",").map(Number);
-        return rgbToHex(r, g, b);
-      });
+      // Merge near-duplicate bins (anti-aliasing, shadow, and highlight
+      // noise around a single true garment color) so a genuinely solid
+      // garment doesn't get misread as a multi-color pattern.
+      const merged: typeof rawBins = [];
+      for (const bin of rawBins) {
+        const target = merged.find((m) => rgbDist(m, bin) < 34);
+        if (target) {
+          const total = target.count + bin.count;
+          target.r = (target.r * target.count + bin.r * bin.count) / total;
+          target.g = (target.g * target.count + bin.g * bin.count) / total;
+          target.b = (target.b * target.count + bin.b * bin.count) / total;
+          target.count = total;
+        } else {
+          merged.push({ ...bin });
+        }
+      }
+      merged.sort((a, b) => b.count - a.count);
 
-      // Detect pattern based on color distribution
+      const top = merged.slice(0, 3);
+      const colors = top.map(rgbToHex);
+
+      // Detect pattern based on color distribution. The runner-up color
+      // must carry real weight AND be visually distinct from the dominant
+      // one — otherwise it's shading/noise on what is really a solid piece.
       let pattern: TaggingResult["pattern"] = "solid";
-      if (colors.length >= 2) {
-        const topCount = sorted[0][1];
-        const secondCount = sorted[1]?.[1] ?? 0;
-        // If second color is significant (>25% of top), consider it multi-color
-        if (secondCount > topCount * 0.25) {
-          pattern = colors.length >= 3 ? "colorblock" : "striped";
+      const [first, second, third] = top;
+      if (first && second) {
+        const distinct = rgbDist(first, second) > 38;
+        const significant = second.count > first.count * 0.3;
+        if (distinct && significant) {
+          const hasThird = !!third && rgbDist(third, first) > 38 && third.count > first.count * 0.18;
+          pattern = hasThird ? "colorblock" : "striped";
         }
       }
 
@@ -181,7 +293,9 @@ export async function tagGarmentHeuristic(file: File, imageDataUrl?: string): Pr
     }
   }
 
-  const colorFamily = guessColor(safeName).family;
+  // Prefer the family of the actual sampled color; only fall back to a
+  // filename guess when there's no photo to sample from at all.
+  const colorFamily = imageDataUrl ? classifyColorFamily(colors[0]) : guessColor(safeName).family;
 
   return {
     name: safeName || "Untitled piece",
