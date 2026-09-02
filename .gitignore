@@ -2,81 +2,61 @@
 # Dependencies
 node_modules/
 
-# Build outputs
+# Build artifacts
 dist/
 build/
-target/
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
 
-# Python
+# Python artifacts
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.py.class
-.Python
-env/
-venv/
-.venv/
-.ENV
-.python-version
-.python_history
-.pythonrc
-.mypy_cache/
-.pytest_cache/
-.coverage
-coverage/
-htmlcov/
+*.py.obj
 
-# Logs
+# Logs and temp files
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+*.tmp
+*.swp
+*.swo
 
 # Environment variables
 .env
 .env.local
-.env.*
-!.env.example
+*.env.*
 
-# IDE
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+
+# IDE files
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
+*.iml
+*.ipr
+*.iws
 
-# OS
+# OS generated files
 .DS_Store
 Thumbs.db
 
-# Temporary files
-*.tmp
-*.temp
-*.bak
-*.backup
+# Testing
+.mypy_cache/
+.pytest_cache/
+.nyc_output/
+coverage/
 
-# Compressed files
-*.zip
-*.gz
-*.tar
-*.tgz
-*.bz2
-*.xz
-*.7z
-*.rar
-*.zst
-*.lz4
-*.lzh
-*.cab
-*.arj
-*.rpm
-*.deb
-*.Z
-*.lz
-*.lzo
+# Distribution / packaging
 *.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
+*.whl
+*.egg
+*.egg-info/
 ```

@@ -317,15 +317,21 @@ export const useAppStore = create<AppStore>()(
 
       /* ----------------------------- data ----------------------------- */
       addGarment: (g) => {
-        set((s) => ({ garments: [g, ...s.garments] }));
+        // Normalize incoming garment to ensure colors/pattern are always present
+        const normalizedGarment: Garment = {
+          ...g,
+          colors: g.colors?.length ? g.colors : [g.color],
+          pattern: g.pattern ?? "solid",
+        };
+        set((s) => ({ garments: [normalizedGarment, ...s.garments] }));
         const user = get().user;
         if (user && !user.isDemo) {
-          void insertGarmentRow(user.id, g).catch(async (error: any) => {
+          void insertGarmentRow(user.id, normalizedGarment).catch(async (error: any) => {
             console.error("Error in insertGarmentRow:", error?.message ?? error, error?.status);
             // Retry once after refreshing session
             try {
               await supabase?.auth.getSession();
-              await insertGarmentRow(user.id, g);
+              await insertGarmentRow(user.id, normalizedGarment);
               return;
             } catch (retryError: any) {
               console.error("Retry failed in addGarment:", retryError?.message ?? retryError, retryError?.status);
@@ -448,7 +454,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: "fitflow-store",
-      version: 2,
+      version: 3,
       storage: safeStorage,
       migrate: (persisted, version) => {
         // v1 (Phase 0) → v2: keep user data, add new session fields.
@@ -460,6 +466,29 @@ export const useAppStore = create<AppStore>()(
             onboardedUsers: [],
             stylePrefs: null,
           } as never;
+        }
+        // v2 → v3: backfill colors/pattern fields on garments for backward compatibility
+        if (version < 3) {
+          const newState = {
+            ...state,
+            garments: ((state as any).garments ?? []).map((g: any) => ({
+              ...g,
+              colors: g.colors?.length ? g.colors : [g.color],
+              pattern: g.pattern ?? "solid",
+            })),
+            looks: ((state as any).looks ?? []).map((look: any) => ({
+              ...look,
+              outfit: {
+                top: look.outfit?.top ? { ...look.outfit.top, colors: look.outfit.top.colors?.length ? look.outfit.top.colors : [look.outfit.top.color], pattern: look.outfit.top.pattern ?? "solid" } : undefined,
+                bottom: look.outfit?.bottom ? { ...look.outfit.bottom, colors: look.outfit.bottom.colors?.length ? look.outfit.bottom.colors : [look.outfit.bottom.color], pattern: look.outfit.bottom.pattern ?? "solid" } : undefined,
+                dress: look.outfit?.dress ? { ...look.outfit.dress, colors: look.outfit.dress.colors?.length ? look.outfit.dress.colors : [look.outfit.dress.color], pattern: look.outfit.dress.pattern ?? "solid" } : undefined,
+                outer: look.outfit?.outer ? { ...look.outfit.outer, colors: look.outfit.outer.colors?.length ? look.outfit.outer.colors : [look.outfit.outer.color], pattern: look.outfit.outer.pattern ?? "solid" } : undefined,
+                shoes: look.outfit?.shoes ? { ...look.outfit.shoes, colors: look.outfit.shoes.colors?.length ? look.outfit.shoes.colors : [look.outfit.shoes.color], pattern: look.outfit.shoes.pattern ?? "solid" } : undefined,
+                accessory: look.outfit?.accessory ? { ...look.outfit.accessory, colors: look.outfit.accessory.colors?.length ? look.outfit.accessory.colors : [look.outfit.accessory.color], pattern: look.outfit.accessory.pattern ?? "solid" } : undefined,
+              },
+            })),
+          };
+          return newState as never;
         }
         return state as never;
       },
