@@ -28,7 +28,9 @@ export interface Garment {
   id: string;
   name: string;
   category: Category;
-  color: string; // hex
+  color: string; // hex (primary/dominant color, same as colors[0])
+  colors: string[]; // 1-3 hex values, ordered by visual prominence
+  pattern: "solid" | "striped" | "colorblock" | "other";
   colorFamily: ColorFamily;
   warmth: Warmth;
   formality: Formality;

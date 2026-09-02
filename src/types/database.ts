@@ -57,6 +57,8 @@ export interface Database {
           image_url: string | null;
           category: string;
           color: string;
+          colors: string[]; // Array of hex values, ordered by prominence
+          pattern: string; // solid | striped | colorblock | other
           color_family: string;
           warmth: number;
           name: string;
@@ -71,6 +73,8 @@ export interface Database {
           image_url?: string | null;
           category: string;
           color: string;
+          colors?: string[]; // Array of hex values
+          pattern?: string; // solid | striped | colorblock | other
           color_family?: string;
           warmth?: number;
           name?: string;
@@ -85,6 +89,8 @@ export interface Database {
           image_url?: string | null;
           category?: string;
           color?: string;
+          colors?: string[];
+          pattern?: string;
           color_family?: string;
           warmth?: number;
           name?: string;

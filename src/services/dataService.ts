@@ -82,11 +82,23 @@ function rowToGarment(r: WardrobeRow): Garment {
   const kind = tags.find((t): t is AccessoryKind =>
     KINDS.includes(t as AccessoryKind)
   );
+  // Parse colors array from database (stored as text[])
+  let colors: string[] = [r.color];
+  if (r.colors && Array.isArray(r.colors) && r.colors.length > 0) {
+    colors = r.colors;
+  }
+  // Parse pattern from database
+  const validPatterns = ["solid", "striped", "colorblock", "other"] as const;
+  const pattern: Garment["pattern"] = validPatterns.includes(r.pattern as any)
+    ? (r.pattern as Garment["pattern"])
+    : "solid";
   return {
     id: r.id,
     name: r.name,
     category,
-    color: r.color,
+    color: colors[0], // primary/dominant color for backward compatibility
+    colors,
+    pattern,
     colorFamily: FAMILIES.includes(r.color_family as ColorFamily)
       ? (r.color_family as ColorFamily)
       : "neutral",
@@ -106,6 +118,8 @@ function garmentToInsert(userId: string, g: Garment): WardrobeInsert {
     image_url: g.photo ?? null,
     category: g.category,
     color: g.color,
+    colors: g.colors, // New field: array of hex values
+    pattern: g.pattern, // New field: pattern type
     color_family: g.colorFamily,
     warmth: g.warmth,
     name: g.name,
