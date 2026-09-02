@@ -18,22 +18,22 @@ const at = (days: number) => t0 + days * 86_400_000;
 
 export const DEMO_WARDROBE: Garment[] = [
   // tops
-  { id: "g-heavy-tee", name: "Heavyweight Tee", category: "top", color: "#ECEAE4", colorFamily: "neutral", warmth: 1, formality: 1, createdAt: at(0) },
-  { id: "g-oxford", name: "Oxford Shirt", category: "top", color: "#9DBBD9", colorFamily: "cool", warmth: 2, formality: 3, createdAt: at(1) },
-  { id: "g-merino-crew", name: "Merino Crewneck", category: "top", color: "#C08552", colorFamily: "earth", warmth: 3, formality: 2, createdAt: at(2) },
-  { id: "g-graphic-tee", name: "Boxy Graphic Tee", category: "top", color: "#2F6B4F", colorFamily: "accent", warmth: 1, formality: 1, createdAt: at(3) },
+  { id: "g-heavy-tee", name: "Heavyweight Tee", category: "top", color: "#ECEAE4", colors: ["#ECEAE4"], pattern: "solid", colorFamily: "neutral", warmth: 1, formality: 1, createdAt: at(0) },
+  { id: "g-oxford", name: "Oxford Shirt", category: "top", color: "#9DBBD9", colors: ["#9DBBD9"], pattern: "solid", colorFamily: "cool", warmth: 2, formality: 3, createdAt: at(1) },
+  { id: "g-merino-crew", name: "Merino Crewneck", category: "top", color: "#C08552", colors: ["#C08552"], pattern: "solid", colorFamily: "earth", warmth: 3, formality: 2, createdAt: at(2) },
+  { id: "g-graphic-tee", name: "Boxy Graphic Tee", category: "top", color: "#2F6B4F", colors: ["#2F6B4F"], pattern: "solid", colorFamily: "accent", warmth: 1, formality: 1, createdAt: at(3) },
   // bottoms
-  { id: "g-selvedge", name: "Selvedge Denim", category: "bottom", color: "#3A4A63", colorFamily: "cool", warmth: 2, formality: 2, createdAt: at(4) },
-  { id: "g-pleated", name: "Pleated Trousers", category: "bottom", color: "#3B3F45", colorFamily: "neutral", warmth: 2, formality: 3, createdAt: at(5) },
-  { id: "g-cargo", name: "Tech Cargo", category: "bottom", color: "#6B6B4A", colorFamily: "earth", warmth: 2, formality: 1, createdAt: at(6) },
+  { id: "g-selvedge", name: "Selvedge Denim", category: "bottom", color: "#3A4A63", colors: ["#3A4A63"], pattern: "solid", colorFamily: "cool", warmth: 2, formality: 2, createdAt: at(4) },
+  { id: "g-pleated", name: "Pleated Trousers", category: "bottom", color: "#3B3F45", colors: ["#3B3F45"], pattern: "solid", colorFamily: "neutral", warmth: 2, formality: 3, createdAt: at(5) },
+  { id: "g-cargo", name: "Tech Cargo", category: "bottom", color: "#6B6B4A", colors: ["#6B6B4A"], pattern: "solid", colorFamily: "earth", warmth: 2, formality: 1, createdAt: at(6) },
   // dress
-  { id: "g-slip-dress", name: "Bias Slip Dress", category: "dress", color: "#7A2E3F", colorFamily: "warm", warmth: 1, formality: 2, createdAt: at(7) },
+  { id: "g-slip-dress", name: "Bias Slip Dress", category: "dress", color: "#7A2E3F", colors: ["#7A2E3F"], pattern: "solid", colorFamily: "warm", warmth: 1, formality: 2, createdAt: at(7) },
   // outerwear
-  { id: "g-overcoat", name: "Wool Overcoat", category: "outerwear", color: "#2A2D33", colorFamily: "neutral", warmth: 3, formality: 3, createdAt: at(8) },
-  { id: "g-trucker", name: "Denim Trucker", category: "outerwear", color: "#4C6285", colorFamily: "cool", warmth: 2, formality: 2, createdAt: at(9) },
+  { id: "g-overcoat", name: "Wool Overcoat", category: "outerwear", color: "#2A2D33", colors: ["#2A2D33"], pattern: "solid", colorFamily: "neutral", warmth: 3, formality: 3, createdAt: at(8) },
+  { id: "g-trucker", name: "Denim Trucker", category: "outerwear", color: "#4C6285", colors: ["#4C6285"], pattern: "solid", colorFamily: "cool", warmth: 2, formality: 2, createdAt: at(9) },
   // shoes
-  { id: "g-court", name: "Court Sneakers", category: "shoes", color: "#ECEAE4", colorFamily: "neutral", warmth: 1, formality: 1, createdAt: at(10) },
-  { id: "g-chelsea", name: "Chelsea Boots", category: "shoes", color: "#5A3B2E", colorFamily: "earth", warmth: 2, formality: 3, createdAt: at(11) },
+  { id: "g-court", name: "Court Sneakers", category: "shoes", color: "#ECEAE4", colors: ["#ECEAE4"], pattern: "solid", colorFamily: "neutral", warmth: 1, formality: 1, createdAt: at(10) },
+  { id: "g-chelsea", name: "Chelsea Boots", category: "shoes", color: "#5A3B2E", colors: ["#5A3B2E"], pattern: "solid", colorFamily: "earth", warmth: 2, formality: 3, createdAt: at(11) },
 ];
 
 const byId = new Map(DEMO_WARDROBE.map((g) => [g.id, g]));

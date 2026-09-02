@@ -5,17 +5,21 @@ import { GarmentGlyph } from "./icons";
 
 /** Render a color swatch that supports multi-color garments */
 function renderSwatch(garment: Garment): React.CSSProperties {
+  // Defensive: handle missing colors array
+  const colors = garment.colors ?? [garment.color];
+  const pattern = garment.pattern ?? "solid";
+  
   // Single color or solid pattern: use simple gradient as before
-  if (garment.colors.length === 1 || garment.pattern === "solid") {
+  if (colors.length === 1 || pattern === "solid") {
     return {
       background: `linear-gradient(160deg, ${garment.color} 0%, ${darken(garment.color, 0.22)} 100%)`,
     };
   }
 
   // Multi-color garments: create pattern-based backgrounds
-  const [c1, c2, c3] = garment.colors;
+  const [c1, c2, c3] = colors;
 
-  if (garment.pattern === "striped") {
+  if (pattern === "striped") {
     // Diagonal stripes for striped patterns
     return {
       backgroundImage: `repeating-linear-gradient(
@@ -28,7 +32,7 @@ function renderSwatch(garment: Garment): React.CSSProperties {
     };
   }
 
-  if (garment.pattern === "colorblock") {
+  if (pattern === "colorblock") {
     // Hard-stop horizontal blocks for colorblock
     if (c3) {
       return {
