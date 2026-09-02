@@ -182,6 +182,12 @@ export function compressImage(
       const step = () => {
         canvas.width = Math.max(1, Math.round(img.width * scale));
         canvas.height = Math.max(1, Math.round(img.height * scale));
+        // Flatten onto white first: JPEG has no alpha channel, and an
+        // untouched canvas defaults transparent pixels to black. Without
+        // this, a cutout garment photo (transparent PNG background) bakes
+        // in a black backdrop that later throws off color/pattern detection.
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         const out = canvas.toDataURL("image/jpeg", quality);
         const approxBytes = out.length * 0.75;
