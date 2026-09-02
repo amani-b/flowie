@@ -36,6 +36,7 @@ import {
   insertOutfitRow,
 } from "../services/dataService";
 import { OCCASION_META, uid } from "../lib/utils";
+import { supabase } from "../services/supabaseClient";
 
 interface WeatherState {
   status: LoadStatus;
@@ -234,7 +235,19 @@ export const useAppStore = create<AppStore>()(
           if (get().user?.id === user.id) {
             set({ garments, looks });
           }
-        } catch {
+        } catch (error: any) {
+          console.error("Error in hydrateFromCloud:", error?.message ?? error, error?.status);
+          // Retry once after refreshing session
+          try {
+            await supabase?.auth.getSession();
+            const retryResult = await fetchUserData(user.id);
+            if (get().user?.id === user.id) {
+              set({ garments: retryResult.garments, looks: retryResult.looks });
+            }
+            return;
+          } catch (retryError: any) {
+            console.error("Retry failed in hydrateFromCloud:", retryError?.message ?? retryError, retryError?.status);
+          }
           if (get().user?.id === user.id) {
             get().notify("Cloud sync failed — working on-device for now", "err");
           }
@@ -307,9 +320,18 @@ export const useAppStore = create<AppStore>()(
         set((s) => ({ garments: [g, ...s.garments] }));
         const user = get().user;
         if (user && !user.isDemo) {
-          void insertGarmentRow(user.id, g).catch(() =>
-            get().notify("Saved locally — cloud sync failed", "err")
-          );
+          void insertGarmentRow(user.id, g).catch(async (error: any) => {
+            console.error("Error in insertGarmentRow:", error?.message ?? error, error?.status);
+            // Retry once after refreshing session
+            try {
+              await supabase?.auth.getSession();
+              await insertGarmentRow(user.id, g);
+              return;
+            } catch (retryError: any) {
+              console.error("Retry failed in addGarment:", retryError?.message ?? retryError, retryError?.status);
+            }
+            get().notify("Saved locally — cloud sync failed", "err");
+          });
         }
       },
       removeGarment: (id) => {
@@ -396,9 +418,18 @@ export const useAppStore = create<AppStore>()(
         get().notify(`Saved “${look.name}”`);
         const user = get().user;
         if (user && !user.isDemo) {
-          void insertOutfitRow(user.id, look).catch(() =>
-            get().notify("Look kept locally — cloud sync failed", "err")
-          );
+          void insertOutfitRow(user.id, look).catch(async (error: any) => {
+            console.error("Error in insertOutfitRow:", error?.message ?? error, error?.status);
+            // Retry once after refreshing session
+            try {
+              await supabase?.auth.getSession();
+              await insertOutfitRow(user.id, look);
+              return;
+            } catch (retryError: any) {
+              console.error("Retry failed in saveLook:", retryError?.message ?? retryError, retryError?.status);
+            }
+            get().notify("Look kept locally — cloud sync failed", "err");
+          });
         }
         return look;
       },

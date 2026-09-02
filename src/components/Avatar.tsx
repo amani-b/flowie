@@ -14,14 +14,85 @@ const pop = (delay: number) => ({
   transition: { type: "spring", stiffness: 320, damping: 26, delay },
 });
 
-function Sleeves({ color, long, outer }: { color: string; long: boolean; outer?: boolean }) {
+/** Generate SVG pattern ID for a garment */
+function getPatternId(g: Garment): string {
+  return `pattern-${g.id}-${g.pattern}`;
+}
+
+/** Render SVG pattern definitions for multi-color garments */
+function renderPatternDefs(garment: Garment) {
+  if (garment.colors.length <= 1 || garment.pattern === "solid") {
+    return null;
+  }
+
+  const [c1, c2, c3] = garment.colors;
+  const patternId = getPatternId(garment);
+
+  if (garment.pattern === "striped") {
+    // Diagonal stripes pattern
+    return (
+      <pattern
+        id={patternId}
+        x="0"
+        y="0"
+        width="16"
+        height="16"
+        patternUnits="userSpaceOnUse"
+        patternTransform="rotate(45)"
+      >
+        <rect x="0" y="0" width="8" height="16" fill={c1} />
+        <rect x="8" y="0" width="8" height="16" fill={c2 || c1} />
+      </pattern>
+    );
+  }
+
+  if (garment.pattern === "colorblock") {
+    // Horizontal blocks pattern
+    if (c3) {
+      return (
+        <pattern id={patternId} x="0" y="0" width="10" height="30" patternUnits="userSpaceOnUse">
+          <rect x="0" y="0" width="10" height="10" fill={c1} />
+          <rect x="0" y="10" width="10" height="10" fill={c2} />
+          <rect x="0" y="20" width="10" height="10" fill={c3} />
+        </pattern>
+      );
+    }
+    return (
+      <pattern id={patternId} x="0" y="0" width="10" height="20" patternUnits="userSpaceOnUse">
+        <rect x="0" y="0" width="10" height="10" fill={c1} />
+        <rect x="0" y="10" width="10" height="10" fill={c2 || c1} />
+      </pattern>
+    );
+  }
+
+  // For 'other' pattern, use a simple checkerboard-like effect
+  return (
+    <pattern id={patternId} x="0" y="0" width="10" height="10" patternUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="5" height="5" fill={c1} />
+      <rect x="5" y="0" width="5" height="5" fill={c2 || c1} />
+      <rect x="0" y="5" width="5" height="5" fill={c2 || c1} />
+      <rect x="5" y="5" width="5" height="5" fill={c3 || c1} />
+    </pattern>
+  );
+}
+
+/** Get the fill value for a garment (pattern URL or solid color) */
+function getGarmentFill(g: Garment): string {
+  if (g.colors.length > 1 && g.pattern !== "solid") {
+    return `url(#${getPatternId(g)})`;
+  }
+  return g.color;
+}
+
+function Sleeves({ g, long, outer }: { g: Garment; long: boolean; outer?: boolean }) {
   const h = long ? 122 : 54;
   const w = outer ? 26 : 23;
   const x = outer ? 58 : 63;
+  const fill = getGarmentFill(g);
   return (
     <>
-      <rect x={x} y={95} width={w} height={h} rx={w / 2} fill={color} />
-      <rect x={240 - x - w} y={95} width={w} height={h} rx={w / 2} fill={color} />
+      <rect x={x} y={95} width={w} height={h} rx={w / 2} fill={fill} />
+      <rect x={240 - x - w} y={95} width={w} height={h} rx={w / 2} fill={fill} />
     </>
   );
 }
@@ -29,10 +100,11 @@ function Sleeves({ color, long, outer }: { color: string; long: boolean; outer?:
 function TopLayer({ g, delay }: { g: Garment; delay: number }) {
   const shade = darken(g.color, 0.16);
   const long = g.warmth >= 2;
+  const fill = getGarmentFill(g);
   return (
     <motion.g {...pop(delay)}>
-      <Sleeves color={g.color} long={long} />
-      <rect x="82" y="90" width="76" height="146" rx="26" fill={g.color} />
+      <Sleeves g={g} long={long} />
+      <rect x="82" y="90" width="76" height="146" rx="26" fill={fill} />
       <rect x="82" y="226" width="76" height="10" rx="5" fill={shade} opacity="0.55" />
       <path
         d="M104 91 Q120 103 136 91"
@@ -49,11 +121,12 @@ function BottomLayer({ g, delay }: { g: Garment; delay: number }) {
   const shade = darken(g.color, 0.18);
   const shorts = g.warmth === 1;
   const legH = shorts ? 78 : 152;
+  const fill = getGarmentFill(g);
   return (
     <motion.g {...pop(delay)}>
-      <rect x="91" y="224" width="58" height="46" rx="16" fill={g.color} />
-      <rect x="94" y="252" width="25" height={legH} rx="11" fill={g.color} />
-      <rect x="121" y="252" width="25" height={legH} rx="11" fill={g.color} />
+      <rect x="91" y="224" width="58" height="46" rx="16" fill={fill} />
+      <rect x="94" y="252" width="25" height={legH} rx="11" fill={fill} />
+      <rect x="121" y="252" width="25" height={legH} rx="11" fill={fill} />
       <rect x="94" y={252 + legH - 9} width="25" height="9" rx="4" fill={shade} opacity="0.5" />
       <rect x="121" y={252 + legH - 9} width="25" height="9" rx="4" fill={shade} opacity="0.5" />
       <rect x="91" y="224" width="58" height="8" rx="4" fill={shade} opacity="0.6" />
@@ -63,12 +136,13 @@ function BottomLayer({ g, delay }: { g: Garment; delay: number }) {
 
 function DressLayer({ g, delay }: { g: Garment; delay: number }) {
   const shade = darken(g.color, 0.16);
+  const fill = getGarmentFill(g);
   return (
     <motion.g {...pop(delay)}>
-      <Sleeves color={g.color} long={g.warmth >= 2} />
+      <Sleeves g={g} long={g.warmth >= 2} />
       <path
         d="M94 90 H146 C151 90 155 94 154.5 99 L150 152 L166 288 C167.2 297 160 303 152 303 H88 C80 303 72.8 297 74 288 L90 152 L85.5 99 C85 94 89 90 94 90 Z"
-        fill={g.color}
+        fill={fill}
       />
       <path d="M90 152 H150" stroke={shade} strokeWidth="3.5" opacity="0.5" strokeLinecap="round" />
       <path d="M80 294 H160" stroke={shade} strokeWidth="5" opacity="0.45" strokeLinecap="round" />
@@ -78,11 +152,12 @@ function DressLayer({ g, delay }: { g: Garment; delay: number }) {
 
 function OuterLayer({ g, delay }: { g: Garment; delay: number }) {
   const shade = darken(g.color, 0.2);
+  const fill = getGarmentFill(g);
   return (
     <motion.g {...pop(delay)}>
-      <Sleeves color={g.color} long outer />
-      <rect x="76" y="87" width="36" height="158" rx="15" fill={g.color} />
-      <rect x="128" y="87" width="36" height="158" rx="15" fill={g.color} />
+      <Sleeves g={g} long outer />
+      <rect x="76" y="87" width="36" height="158" rx="15" fill={fill} />
+      <rect x="128" y="87" width="36" height="158" rx="15" fill={fill} />
       <rect x="106" y="90" width="6" height="152" rx="3" fill={shade} opacity="0.55" />
       <rect x="128" y="90" width="6" height="152" rx="3" fill={shade} opacity="0.55" />
       <path d="M112 90 L97 95 L109 108 Z" fill={shade} />
@@ -94,10 +169,11 @@ function OuterLayer({ g, delay }: { g: Garment; delay: number }) {
 function ShoesLayer({ g, delay }: { g: Garment; delay: number }) {
   const sole = darken(g.color, 0.3);
   const lace = isLightColor(g.color) ? darken(g.color, 0.25) : "rgba(255,255,255,0.4)";
+  const fill = getGarmentFill(g);
   return (
     <motion.g {...pop(delay)}>
-      <rect x="85" y="392" width="41" height="26" rx="12" fill={g.color} />
-      <rect x="114" y="392" width="41" height="26" rx="12" fill={g.color} />
+      <rect x="85" y="392" width="41" height="26" rx="12" fill={fill} />
+      <rect x="114" y="392" width="41" height="26" rx="12" fill={fill} />
       <rect x="85" y="410" width="41" height="8" rx="4" fill={sole} />
       <rect x="114" y="410" width="41" height="8" rx="4" fill={sole} />
       <path d="M94 399 H112 M128 399 H146" stroke={lace} strokeWidth="3" strokeLinecap="round" />
@@ -107,11 +183,12 @@ function ShoesLayer({ g, delay }: { g: Garment; delay: number }) {
 
 function AccessoryLayer({ g, delay }: { g: Garment; delay: number }) {
   const shade = darken(g.color, 0.2);
+  const fill = getGarmentFill(g);
   if (g.kind === "cap") {
     return (
       <motion.g {...pop(delay)}>
-        <path d="M95 48 A25 25 0 0 1 145 48 Z" fill={g.color} />
-        <rect x="138" y="43" width="30" height="9" rx="4.5" fill={g.color} />
+        <path d="M95 48 A25 25 0 0 1 145 48 Z" fill={fill} />
+        <rect x="138" y="43" width="30" height="9" rx="4.5" fill={fill} />
         <rect x="138" y="48" width="30" height="4" rx="2" fill={shade} opacity="0.5" />
         <circle cx="120" cy="24" r="4" fill={shade} />
       </motion.g>
@@ -122,11 +199,11 @@ function AccessoryLayer({ g, delay }: { g: Garment; delay: number }) {
       <motion.g {...pop(delay)}>
         <path
           d="M160 102 L176 206"
-          stroke={g.color}
+          stroke={fill}
           strokeWidth="7"
           strokeLinecap="round"
         />
-        <rect x="160" y="202" width="38" height="44" rx="11" fill={g.color} />
+        <rect x="160" y="202" width="38" height="44" rx="11" fill={fill} />
         <rect x="160" y="202" width="38" height="14" rx="7" fill={shade} opacity="0.6" />
       </motion.g>
     );
@@ -134,8 +211,8 @@ function AccessoryLayer({ g, delay }: { g: Garment; delay: number }) {
   // default: scarf
   return (
     <motion.g {...pop(delay)}>
-      <rect x="95" y="76" width="50" height="19" rx="9.5" fill={g.color} />
-      <rect x="105" y="90" width="21" height="52" rx="10" fill={g.color} />
+      <rect x="95" y="76" width="50" height="19" rx="9.5" fill={fill} />
+      <rect x="105" y="90" width="21" height="52" rx="10" fill={fill} />
       <rect x="105" y="132" width="21" height="10" rx="5" fill={shade} opacity="0.55" />
       <rect x="95" y="86" width="50" height="6" rx="3" fill={shade} opacity="0.4" />
     </motion.g>
@@ -152,8 +229,22 @@ export default function Avatar({
   /** change to retrigger the layer pop-in animation */
   animateKey?: string | number;
 }) {
+  // Collect all garments that need pattern definitions
+  const garmentsWithPatterns = [
+    outfit.top,
+    outfit.bottom,
+    outfit.dress,
+    outfit.outer,
+    outfit.shoes,
+    outfit.accessory,
+  ].filter((g): g is Garment => !!(g && g.colors.length > 1 && g.pattern !== "solid"));
+
   return (
     <svg viewBox="0 0 240 440" className={className} aria-hidden>
+      {/* Define patterns for multi-color garments */}
+      <defs>
+        {garmentsWithPatterns.map((g) => renderPatternDefs(g))}
+      </defs>
       <g key={animateKey ?? "static"}>
         {/* ground shadow */}
         <ellipse cx="120" cy="424" rx="58" ry="9" fill="#000" opacity="0.16" />
