@@ -380,6 +380,8 @@ function AddForm({ onDone }: { onDone: () => void }) {
       name: name.trim(),
       category,
       color: swatch.hex,
+      colors: [swatch.hex],
+      pattern: "solid",
       colorFamily: swatch.family,
       warmth,
       formality,

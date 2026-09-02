@@ -16,19 +16,23 @@ const pop = (delay: number) => ({
 
 /** Generate SVG pattern ID for a garment */
 function getPatternId(g: Garment): string {
-  return `pattern-${g.id}-${g.pattern}`;
+  const pattern = g.pattern ?? "solid";
+  return `pattern-${g.id}-${pattern}`;
 }
 
 /** Render SVG pattern definitions for multi-color garments */
 function renderPatternDefs(garment: Garment) {
-  if (garment.colors.length <= 1 || garment.pattern === "solid") {
+  const colors = garment.colors ?? [garment.color];
+  const pattern = garment.pattern ?? "solid";
+  
+  if (colors.length <= 1 || pattern === "solid") {
     return null;
   }
 
-  const [c1, c2, c3] = garment.colors;
+  const [c1, c2, c3] = colors;
   const patternId = getPatternId(garment);
 
-  if (garment.pattern === "striped") {
+  if (pattern === "striped") {
     // Diagonal stripes pattern
     return (
       <pattern
@@ -46,7 +50,7 @@ function renderPatternDefs(garment: Garment) {
     );
   }
 
-  if (garment.pattern === "colorblock") {
+  if (pattern === "colorblock") {
     // Horizontal blocks pattern
     if (c3) {
       return (
@@ -78,7 +82,10 @@ function renderPatternDefs(garment: Garment) {
 
 /** Get the fill value for a garment (pattern URL or solid color) */
 function getGarmentFill(g: Garment): string {
-  if (g.colors.length > 1 && g.pattern !== "solid") {
+  const colors = g.colors ?? [g.color];
+  const pattern = g.pattern ?? "solid";
+  
+  if (colors.length > 1 && pattern !== "solid") {
     return `url(#${getPatternId(g)})`;
   }
   return g.color;
@@ -237,7 +244,7 @@ export default function Avatar({
     outfit.outer,
     outfit.shoes,
     outfit.accessory,
-  ].filter((g): g is Garment => !!(g && g.colors.length > 1 && g.pattern !== "solid"));
+  ].filter((g): g is Garment => !!(g && (g.colors?.length ?? 1) > 1 && (g.pattern ?? "solid") !== "solid"));
 
   return (
     <svg viewBox="0 0 240 440" className={className} aria-hidden>
