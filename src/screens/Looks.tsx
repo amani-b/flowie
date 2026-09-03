@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Cpu, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { Cpu, Search, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { cn, OCCASION_META, timeAgo } from "../lib/utils";
 import type { Garment, SavedLook } from "../types";
@@ -16,8 +16,10 @@ function pieces(o: Record<string, Garment | undefined>): Garment[] {
 
 function LookSheet({ look, onClose }: { look: SavedLook | null; onClose: () => void }) {
   const deleteLook = useAppStore((s) => s.deleteLook);
+  const updateLookTags = useAppStore((s) => s.updateLookTags);
   const setTab = useAppStore((s) => s.setTab);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [tagInput, setTagInput] = useState("");
 
   useEffect(() => setConfirmDel(false), [look?.id]);
   useEffect(() => {
@@ -25,6 +27,20 @@ function LookSheet({ look, onClose }: { look: SavedLook | null; onClose: () => v
     const t = setTimeout(() => setConfirmDel(false), 2600);
     return () => clearTimeout(t);
   }, [confirmDel]);
+
+  const handleAddTag = () => {
+    const trimmed = tagInput.trim();
+    if (!trimmed || !look) return;
+    const newTags = [...(look.tags ?? []), trimmed];
+    updateLookTags(look.id, newTags);
+    setTagInput("");
+  };
+
+  const handleRemoveTag = (tagToRemove: string) => {
+    if (!look) return;
+    const newTags = (look.tags ?? []).filter((t) => t !== tagToRemove);
+    updateLookTags(look.id, newTags);
+  };
 
   return (
     <Sheet open={!!look} onClose={onClose} title={look?.name}>
@@ -86,6 +102,48 @@ function LookSheet({ look, onClose }: { look: SavedLook | null; onClose: () => v
             </p>
           )}
 
+          {/* Tag editor */}
+          <div>
+            <p className="mb-2 label-micro">Tags</p>
+            <div className="flex flex-wrap gap-1.5">
+              {(look.tags ?? []).map((tag) => (
+                <span
+                  key={tag}
+                  className="flex items-center gap-1 rounded-full bg-accsoft px-2.5 py-1 text-[11px] font-extrabold text-acc"
+                >
+                  {tag}
+                  <button
+                    onClick={() => handleRemoveTag(tag)}
+                    className="ml-0.5 rounded-full p-0.5 hover:bg-acc/20"
+                    aria-label={`Remove ${tag}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddTag()}
+                  placeholder="+ add tag"
+                  className="w-[100px] rounded-full border border-line bg-card px-2.5 py-1 text-[11px] font-medium placeholder:text-mut focus:border-acc focus:outline-none"
+                />
+                <button
+                  onClick={handleAddTag}
+                  disabled={!tagInput.trim()}
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-acc text-accink transition disabled:opacity-50 active:scale-95"
+                  aria-label="Add tag"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path d="M7 1V13M1 7H13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div className="flex gap-2 pt-1">
             <button
               onClick={() => {
@@ -123,6 +181,17 @@ export default function Looks() {
   const looks = useAppStore((s) => s.looks);
   const setTab = useAppStore((s) => s.setTab);
   const [sel, setSel] = useState<SavedLook | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Filter looks by name, occasion, or tags
+  const filteredLooks = looks.filter((look) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    const matchesName = look.name.toLowerCase().includes(q);
+    const matchesOccasion = OCCASION_META[look.occasion].label.toLowerCase().includes(q);
+    const matchesTags = (look.tags ?? []).some((t) => t.toLowerCase().includes(q));
+    return matchesName || matchesOccasion || matchesTags;
+  });
 
   return (
     <div className="px-4 pb-44 pt-4">
@@ -132,33 +201,76 @@ export default function Looks() {
           <h1 className="font-display text-[27px] font-extrabold tracking-tight">Lookbook</h1>
         </div>
         <span className="mb-1.5 rounded-full border border-line bg-card px-2.5 py-1 text-[11px] font-extrabold text-mut">
-          {looks.length} looks
+          {filteredLooks.length} looks
         </span>
       </header>
 
-      {looks.length === 0 ? (
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card mt-6 flex flex-col items-center rounded-[24px] px-6 py-12 text-center"
-        >
-          <LogoMark className="h-14 w-14 text-mut" />
-          <h2 className="mt-4 font-display text-[20px] font-extrabold">No looks pinned yet</h2>
-          <p className="mt-1.5 max-w-[260px] text-[13px] font-medium leading-relaxed text-mut">
-            When the studio nails an outfit, save it here to build your personal
-            rotation.
-          </p>
-          <button
-            onClick={() => setTab("studio")}
-            className="mt-5 flex items-center gap-2 rounded-full bg-acc px-5 py-2.5 text-[13px] font-extrabold text-accink transition active:scale-95"
+      {/* Search bar */}
+      <div className="mt-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-mut" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by name, occasion, or tag"
+            className="w-full rounded-[16px] border border-line bg-card py-2.5 pl-10 pr-3 text-[13px] font-medium placeholder:text-mut focus:border-acc focus:outline-none"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full bg-line text-mut hover:text-ink"
+              aria-label="Clear search"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {filteredLooks.length === 0 ? (
+        looks.length === 0 ? (
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="card mt-6 flex flex-col items-center rounded-[24px] px-6 py-12 text-center"
           >
-            <Wand2 className="h-4 w-4" /> Style something
-          </button>
-        </motion.div>
+            <LogoMark className="h-14 w-14 text-mut" />
+            <h2 className="mt-4 font-display text-[20px] font-extrabold">No looks pinned yet</h2>
+            <p className="mt-1.5 max-w-[260px] text-[13px] font-medium leading-relaxed text-mut">
+              When the studio nails an outfit, save it here to build your personal
+              rotation.
+            </p>
+            <button
+              onClick={() => setTab("studio")}
+              className="mt-5 flex items-center gap-2 rounded-full bg-acc px-5 py-2.5 text-[13px] font-extrabold text-accink transition active:scale-95"
+            >
+              <Wand2 className="h-4 w-4" /> Style something
+            </button>
+          </motion.div>
+        ) : (
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="card mt-6 flex flex-col items-center rounded-[24px] px-6 py-12 text-center"
+          >
+            <Search className="mb-2 h-10 w-10 text-mut opacity-50" />
+            <h2 className="mt-2 font-display text-[18px] font-extrabold">No matches found</h2>
+            <p className="mt-1.5 max-w-[260px] text-[13px] font-medium leading-relaxed text-mut">
+              Try a different search term or clear the filter.
+            </p>
+            <button
+              onClick={() => setSearchQuery("")}
+              className="mt-4 rounded-full border border-line px-4 py-2 text-[12px] font-extrabold text-mut transition active:scale-95"
+            >
+              Clear search
+            </button>
+          </motion.div>
+        )
       ) : (
         <motion.div layout className="mt-5 grid grid-cols-2 gap-3">
           <AnimatePresence mode="popLayout">
-            {looks.map((look) => (
+            {filteredLooks.map((look) => (
               <motion.button
                 key={look.id}
                 layout

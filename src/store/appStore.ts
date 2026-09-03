@@ -265,10 +265,18 @@ export const useAppStore = create<AppStore>()(
         const user = get().user;
         if (!user || user.isDemo) return;
         try {
-          const [{ garments, looks }, schedules] = await Promise.all([
+          const [{ garments, looks }, scheduleRows] = await Promise.all([
             fetchUserData(user.id),
             fetchSchedules(user.id),
           ]);
+          // Map DB rows to Schedule type (snake_case → camelCase)
+          const schedules: Schedule[] = scheduleRows.map((r) => ({
+            id: r.id,
+            userId: r.user_id,
+            outfitId: r.outfit_id,
+            scheduledDate: r.scheduled_date,
+            createdAt: new Date(r.created_at).getTime(),
+          }));
           // Only apply if this account is still active.
           if (get().user?.id === user.id) {
             set({ garments, looks, schedules });
@@ -278,12 +286,19 @@ export const useAppStore = create<AppStore>()(
           // Retry once after refreshing session
           try {
             await supabase?.auth.getSession();
-            const [retryData, retrySchedules] = await Promise.all([
+            const [retryData, retryScheduleRows] = await Promise.all([
               fetchUserData(user.id),
               fetchSchedules(user.id),
             ]);
+            const schedules: Schedule[] = retryScheduleRows.map((r) => ({
+              id: r.id,
+              userId: r.user_id,
+              outfitId: r.outfit_id,
+              scheduledDate: r.scheduled_date,
+              createdAt: new Date(r.created_at).getTime(),
+            }));
             if (get().user?.id === user.id) {
-              set({ garments: retryData.garments, looks: retryData.looks, schedules: retrySchedules });
+              set({ garments: retryData.garments, looks: retryData.looks, schedules });
             }
             return;
           } catch (retryError: any) {
