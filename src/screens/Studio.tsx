@@ -373,21 +373,21 @@ export default function Studio() {
       <Sheet
         open={!!activeSlot}
         onClose={() => setActiveSlot(null)}
-        title={`Select ${SLOT_LABELS[activeSlot!].toLowerCase()}`}
+        title={activeSlot ? `Select ${SLOT_LABELS[activeSlot].toLowerCase()}` : "Select item"}
       >
         <div className="mt-2 grid grid-cols-2 gap-3">
-          {getGarmentsByCategory(activeSlot!).length === 0 ? (
+          {!activeSlot || getGarmentsByCategory(activeSlot).length === 0 ? (
             <div className="col-span-2 flex flex-col items-center py-8 text-center">
               <span className="flex h-12 w-12 items-center justify-center rounded-full bg-accsoft text-acc">
                 <Shirt className="h-6 w-6" />
               </span>
               <p className="mt-3 text-[14px] font-extrabold">Nothing here yet</p>
               <p className="mt-1 max-w-[260px] text-[12.5px] font-medium text-mut">
-                Add some {SLOT_LABELS[activeSlot!].toLowerCase()} to your closet first.
+                Add some {activeSlot ? SLOT_LABELS[activeSlot].toLowerCase() : "items"} to your closet first.
               </p>
             </div>
           ) : (
-            getGarmentsByCategory(activeSlot!).map((g) => (
+            getGarmentsByCategory(activeSlot).map((g) => (
               <button
                 key={g.id}
                 onClick={() => selectGarmentForSlot(g)}
