@@ -9,9 +9,9 @@ export function cn(...parts: Array<string | false | null | undefined>): string {
 export function uid(prefix = "id"): string {
   const rnd =
     typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID().slice(0, 8)
+      ? crypto.randomUUID()
       : Math.random().toString(36).slice(2, 10);
-  return `${prefix}-${rnd}`;
+  return prefix === "uuid" ? rnd : `${prefix}-${rnd}`;
 }
 
 export const clamp = (n: number, min: number, max: number) =>
