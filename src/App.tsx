@@ -18,6 +18,11 @@ import CalendarView from "./screens/Calendar";
 import { LogoMark } from "./components/icons";
 import { supabase } from "./services/supabaseClient";
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
+
 /**
  * OAuthHashHandler detects an OAuth hash (access_token) in the URL
  * and redirects to /auth/callback to let AuthCallback handle it.
@@ -166,6 +171,32 @@ function AppContent() {
   );
 }
 
+/**
+ * InstallPromptHandler captures the beforeinstallprompt event
+ * and stores it in the app store for the Drawer to use.
+ */
+function InstallPromptHandler() {
+  const setInstallPrompt = useAppStore((s) => s.setInstallPrompt);
+
+  useEffect(() => {
+    let capturedEvent: BeforeInstallPromptEvent | null = null;
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      capturedEvent = e as BeforeInstallPromptEvent;
+      setInstallPrompt(capturedEvent);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    };
+  }, [setInstallPrompt]);
+
+  return null;
+}
+
 export default function App() {
   const boot = useAppStore((s) => s.boot);
 
@@ -179,6 +210,8 @@ export default function App() {
       <OAuthHashHandler />
       {/* VisibilityChangeHandler manages Supabase token refresh for backgrounded tabs */}
       <VisibilityChangeHandler />
+      {/* InstallPromptHandler captures PWA install prompt event */}
+      <InstallPromptHandler />
       <Routes>
         <Route path="/" element={<AppContent />} />
         <Route path="/auth/callback" element={<AuthCallback />} />

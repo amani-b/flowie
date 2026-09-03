@@ -89,12 +89,14 @@ export interface AppStore {
   units: Units;
   tab: TabId;
   drawerOpen: boolean;
+  installPrompt: BeforeInstallPromptEvent | null;
 
   setTheme: (t: ThemeMode) => void;
   toggleTheme: () => void;
   setUnits: (u: Units) => void;
   setTab: (t: TabId) => void;
   setDrawer: (open: boolean) => void;
+  setInstallPrompt: (event: BeforeInstallPromptEvent | null) => void;
 
   /* ------------------------------- data ------------------------------- */
   garments: Garment[];
@@ -126,6 +128,11 @@ export interface AppStore {
   /* --------------------------- sync retry ---------------------------- */
   _syncState: SyncState;
   retrySync: () => Promise<void>;
+}
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 }
 
 const IDLE_GEN: GenerationState = {
@@ -347,6 +354,7 @@ export const useAppStore = create<AppStore>()(
       units: "C",
       tab: "home",
       drawerOpen: false,
+      installPrompt: null,
       garments: [],
       looks: [],
       schedules: [],
@@ -377,6 +385,7 @@ export const useAppStore = create<AppStore>()(
         set({ tab: t });
       },
       setDrawer: (open) => set({ drawerOpen: open }),
+      setInstallPrompt: (event) => set({ installPrompt: event }),
 
       /* ----------------------------- data ----------------------------- */
       addGarment: async (g, photoDataUrl) => {
