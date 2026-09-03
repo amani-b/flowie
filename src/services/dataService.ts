@@ -113,7 +113,7 @@ function rowToGarment(r: WardrobeRow): Garment {
 function garmentToInsert(userId: string, g: Garment): WardrobeInsert {
   const tags: string[] = g.kind ? [g.kind] : [];
   return {
-    id: g.id.startsWith("g-") ? undefined : g.id, // local ids aren't uuids → let Postgres mint one
+    id: g.id, // Always use the same id for storage and DB row
     user_id: userId,
     image_url: g.photo ?? null,
     category: g.category,
@@ -165,7 +165,7 @@ function rowToLook(r: OutfitRow, garments: Garment[]): SavedLook {
 
 function lookToInsert(userId: string, look: SavedLook): OutfitInsert {
   return {
-    id: look.id.startsWith("look-") ? undefined : look.id,
+    id: look.id, // Always use the same id for storage and DB row
     user_id: userId,
     name: look.name,
     item_ids: outfitPieces(look.outfit).map((g) => g.id),
@@ -227,10 +227,10 @@ export async function insertGarmentRow(
 
   const { data, error } = await supabase
     .from("wardrobe_items")
-    .insert({
+    .upsert({
       ...garmentToInsert(userId, g),
       image_url: imageUrl,
-    })
+    }, { onConflict: "id" })
     .select("id")
     .single();
   if (error) throw new Error(error.message);
@@ -258,7 +258,7 @@ export async function insertOutfitRow(
   look: SavedLook
 ): Promise<void> {
   if (!supabase) return;
-  const { error } = await supabase.from("outfits").insert(lookToInsert(userId, look));
+  const { error } = await supabase.from("outfits").upsert(lookToInsert(userId, look), { onConflict: "id" });
   if (error) throw new Error(error.message);
 }
 

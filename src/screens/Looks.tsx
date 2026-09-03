@@ -40,6 +40,10 @@ function LookSheet({ look, onClose }: { look: SavedLook | null; onClose: () => v
                   <>
                     <Sparkles className="h-3 w-3 text-acc" /> GEMINI
                   </>
+                ) : look.engine === "manual" ? (
+                  <>
+                    <Wand2 className="h-3 w-3 text-rose" /> MANUAL
+                  </>
                 ) : (
                   <>
                     <Cpu className="h-3 w-3 text-amber" /> HEURISTIC
