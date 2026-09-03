@@ -139,6 +139,9 @@ create table if not exists public.outfits (
   created_at   timestamptz not null default now()
 );
 
+-- Additive migration for tags column (safe to run multiple times)
+alter table public.outfits add column if not exists tags text[] not null default '{}';
+
 create index if not exists outfits_user_idx
   on public.outfits (user_id, created_at desc);
 
