@@ -1,11 +1,8 @@
 ```
-# Dependencies
-node_modules/
-
 # Build artifacts
 dist/
 build/
 
-# Vite specific
-.vite/
+# Dependencies
+node_modules/
 ```
