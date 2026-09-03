@@ -376,7 +376,6 @@ function AddForm({ onDone }: { onDone: () => void }) {
       return;
     }
     addGarment({
-      id: uid("g"),
       name: name.trim(),
       category,
       color: swatch.hex,
@@ -387,7 +386,6 @@ function AddForm({ onDone }: { onDone: () => void }) {
       formality,
       kind: category === "accessory" ? "scarf" : undefined,
       photo: photo ?? undefined,
-      createdAt: Date.now(),
     });
     notify(`“${name.trim()}” added to closet`);
     onDone();
