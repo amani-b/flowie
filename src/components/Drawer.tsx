@@ -4,6 +4,7 @@ import {
   Check,
   Copy,
   Cpu,
+  Download,
   Globe,
   KeyRound,
   LogOut,
@@ -122,6 +123,8 @@ export default function Drawer() {
   const user = useAppStore((s) => s.user);
   const mode = useAppStore((s) => s.mode);
   const signOutUser = useAppStore((s) => s.signOutUser);
+  const installPrompt = useAppStore((s) => s.installPrompt);
+  const setInstallPrompt = useAppStore((s) => s.setInstallPrompt);
 
   const initials = (user?.name ?? "?")
     .split(/\s+/)
@@ -143,6 +146,24 @@ export default function Drawer() {
   };
 
   const callbackUrl = supabaseUrl ? `${supabaseUrl}/auth/v1/callback` : "";
+
+  const handleInstall = async () => {
+    if (!installPrompt) return;
+    try {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice.outcome === "accepted") {
+        setInstallPrompt(null);
+      }
+    } catch {
+      // Prompt failed — just clear the stored event
+      setInstallPrompt(null);
+    }
+  };
+
+  // Only show install row if we have a captured prompt AND app is not already standalone
+  const isStandalone = typeof window !== "undefined" && window.matchMedia("(display-mode: standalone)").matches;
+  const showInstallRow = installPrompt && !isStandalone;
 
   return (
     <AnimatePresence>
@@ -315,6 +336,15 @@ export default function Drawer() {
               <section className="space-y-2.5">
                 <p className="label-micro">Data</p>
                 <div className="card space-y-2 rounded-[20px] p-3">
+                  {showInstallRow && (
+                    <button
+                      onClick={handleInstall}
+                      className="flex w-full items-center gap-2.5 rounded-[13px] px-2.5 py-2 text-left text-[12.5px] font-extrabold transition hover:bg-bgdeep active:scale-[0.98]"
+                    >
+                      <Download className="h-4 w-4 text-acc" />
+                      Install app
+                    </button>
+                  )}
                   <button
                     onClick={restoreSamples}
                     className="flex w-full items-center gap-2.5 rounded-[13px] px-2.5 py-2 text-left text-[12.5px] font-extrabold transition hover:bg-bgdeep active:scale-[0.98]"
