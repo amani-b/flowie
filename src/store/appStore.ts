@@ -43,6 +43,23 @@ interface WeatherState {
   data: WeatherNow | null;
 }
 
+type SyncStatus = "synced" | "pending" | "error";
+
+interface SyncState {
+  pendingGarments: Set<string>;
+  pendingLooks: Set<string>;
+  errorGarments: Set<string>;
+  errorLooks: Set<string>;
+}
+
+// For persistence (Sets don't serialize well)
+interface PersistedSyncState {
+  pendingGarments: string[];
+  pendingLooks: string[];
+  errorGarments: string[];
+  errorLooks: string[];
+}
+
 export interface AppStore {
   /* ------------------------------ session ----------------------------- */
   mode: AppMode;
@@ -83,7 +100,7 @@ export interface AppStore {
   today: StyleResult | null;
   toast: ToastMsg | null;
 
-  addGarment: (g: Garment) => void;
+  addGarment: (g: Omit<Garment, "id" | "createdAt">, photoDataUrl?: string) => Promise<void>;
   removeGarment: (id: string) => void;
   restoreSamples: () => void;
   clearAllData: () => void;
@@ -91,11 +108,15 @@ export interface AppStore {
   refreshWeather: () => Promise<void>;
   generateToday: (occasion?: Occasion) => Promise<void>;
   generateForStudio: (occasion: Occasion) => Promise<void>;
-  saveLook: (result: StyleResult, name?: string) => SavedLook;
+  saveLook: (result: StyleResult, name?: string) => Promise<SavedLook>;
   deleteLook: (id: string) => void;
 
   notify: (text: string, tone?: "ok" | "err") => void;
   clearToast: () => void;
+
+  /* --------------------------- sync retry ---------------------------- */
+  _syncState: SyncState;
+  retrySync: () => Promise<void>;
 }
 
 const IDLE_GEN: GenerationState = {
@@ -195,6 +216,11 @@ export const useAppStore = create<AppStore>()(
             set({ user: null, ownerId: null, authStatus: "signedOut", ...EMPTY_DATA });
           }
         });
+        
+        // Trigger initial sync retry for any pending/error items
+        setTimeout(() => {
+          get().retrySync();
+        }, 500);
       },
 
       completeAuth: (user) => {
@@ -297,6 +323,12 @@ export const useAppStore = create<AppStore>()(
       generation: IDLE_GEN,
       today: null,
       toast: null,
+      _syncState: {
+        pendingGarments: new Set<string>(),
+        pendingLooks: new Set<string>(),
+        errorGarments: new Set<string>(),
+        errorLooks: new Set<string>(),
+      },
 
       setTheme: (t) => {
         applyThemeToDom(t);
@@ -316,28 +348,67 @@ export const useAppStore = create<AppStore>()(
       setDrawer: (open) => set({ drawerOpen: open }),
 
       /* ----------------------------- data ----------------------------- */
-      addGarment: (g) => {
+      addGarment: async (g, photoDataUrl) => {
+        // Generate stable UUID upfront for sync consistency
+        const id = crypto.randomUUID();
+        
         // Normalize incoming garment to ensure colors/pattern are always present
         const normalizedGarment: Garment = {
+          id,
           ...g,
           colors: g.colors?.length ? g.colors : [g.color],
           pattern: g.pattern ?? "solid",
+          createdAt: Date.now(),
+          syncStatus: "pending",
         };
-        set((s) => ({ garments: [normalizedGarment, ...s.garments] }));
+        
+        set((s) => ({ 
+          garments: [normalizedGarment, ...s.garments],
+          _syncState: {
+            ...s._syncState,
+            pendingGarments: new Set(s._syncState.pendingGarments).add(id),
+          }
+        }));
+        
         const user = get().user;
-        if (user && !user.isDemo) {
-          void insertGarmentRow(user.id, normalizedGarment).catch(async (error: any) => {
-            console.error("Error in insertGarmentRow:", error?.message ?? error, error?.status);
-            // Retry once after refreshing session
-            try {
-              await supabase?.auth.getSession();
-              await insertGarmentRow(user.id, normalizedGarment);
-              return;
-            } catch (retryError: any) {
-              console.error("Retry failed in addGarment:", retryError?.message ?? retryError, retryError?.status);
+        if (!user || user.isDemo) {
+          // Demo/mock mode: mark as synced immediately
+          set((s) => ({
+            garments: s.garments.map(garment => 
+              garment.id === id ? { ...garment, syncStatus: "synced" as const } : garment
+            ),
+            _syncState: {
+              ...s._syncState,
+              pendingGarments: new Set(s._syncState.pendingGarments).delete(id) as Set<string>,
             }
-            get().notify("Saved locally — cloud sync failed", "err");
-          });
+          }));
+          return;
+        }
+        
+        // Live mode: attempt cloud sync
+        try {
+          await insertGarmentRow(user.id, normalizedGarment);
+          set((s) => ({
+            garments: s.garments.map(garment => 
+              garment.id === id ? { ...garment, syncStatus: "synced" as const } : garment
+            ),
+            _syncState: {
+              ...s._syncState,
+              pendingGarments: new Set(s._syncState.pendingGarments).delete(id) as Set<string>,
+            }
+          }));
+        } catch (error: any) {
+          console.error("Error in addGarment sync:", error?.message ?? error);
+          set((s) => ({
+            garments: s.garments.map(garment => 
+              garment.id === id ? { ...garment, syncStatus: "error" as const } : garment
+            ),
+            _syncState: {
+              ...s._syncState,
+              pendingGarments: new Set(s._syncState.pendingGarments).delete(id) as Set<string>,
+              errorGarments: new Set(s._syncState.errorGarments).add(id),
+            }
+          }));
         }
       },
       removeGarment: (id) => {
@@ -406,10 +477,12 @@ export const useAppStore = create<AppStore>()(
         }
       },
 
-      saveLook: (result, name) => {
+      saveLook: async (result, name) => {
         const wx = get().weather.data;
+        // Generate stable UUID upfront for sync consistency
+        const id = crypto.randomUUID();
         const look: SavedLook = {
-          id: uid("look"),
+          id,
           name:
             name?.trim() ||
             `${OCCASION_META[result.occasion].label} look ${get().looks.length + 1}`,
@@ -419,23 +492,56 @@ export const useAppStore = create<AppStore>()(
           engine: result.engine,
           weatherTags: wx ? [wx.bucket, wx.isRain ? "rain" : "dry"] : [],
           createdAt: Date.now(),
+          syncStatus: "pending",
         };
-        set((s) => ({ looks: [look, ...s.looks].slice(0, 40) }));
-        get().notify(`Saved “${look.name}”`);
+        set((s) => ({ 
+          looks: [look, ...s.looks].slice(0, 40),
+          _syncState: {
+            ...s._syncState,
+            pendingLooks: new Set(s._syncState.pendingLooks).add(id),
+          }
+        }));
+        get().notify(`Saved "${look.name}"`);
+        
         const user = get().user;
-        if (user && !user.isDemo) {
-          void insertOutfitRow(user.id, look).catch(async (error: any) => {
-            console.error("Error in insertOutfitRow:", error?.message ?? error, error?.status);
-            // Retry once after refreshing session
-            try {
-              await supabase?.auth.getSession();
-              await insertOutfitRow(user.id, look);
-              return;
-            } catch (retryError: any) {
-              console.error("Retry failed in saveLook:", retryError?.message ?? retryError, retryError?.status);
+        if (!user || user.isDemo) {
+          // Demo/mock mode: mark as synced immediately
+          set((s) => ({
+            looks: s.looks.map(l => 
+              l.id === id ? { ...l, syncStatus: "synced" as const } : l
+            ),
+            _syncState: {
+              ...s._syncState,
+              pendingLooks: new Set(s._syncState.pendingLooks).delete(id) as Set<string>,
             }
-            get().notify("Look kept locally — cloud sync failed", "err");
-          });
+          }));
+          return look;
+        }
+        
+        // Live mode: attempt cloud sync
+        try {
+          await insertOutfitRow(user.id, look);
+          set((s) => ({
+            looks: s.looks.map(l => 
+              l.id === id ? { ...l, syncStatus: "synced" as const } : l
+            ),
+            _syncState: {
+              ...s._syncState,
+              pendingLooks: new Set(s._syncState.pendingLooks).delete(id) as Set<string>,
+            }
+          }));
+        } catch (error: any) {
+          console.error("Error in saveLook sync:", error?.message ?? error);
+          set((s) => ({
+            looks: s.looks.map(l => 
+              l.id === id ? { ...l, syncStatus: "error" as const } : l
+            ),
+            _syncState: {
+              ...s._syncState,
+              pendingLooks: new Set(s._syncState.pendingLooks).delete(id) as Set<string>,
+              errorLooks: new Set(s._syncState.errorLooks).add(id),
+            }
+          }));
         }
         return look;
       },
@@ -445,6 +551,92 @@ export const useAppStore = create<AppStore>()(
         const user = get().user;
         if (user && !user.isDemo && !id.startsWith("look-")) {
           void deleteOutfitRow(id).catch(() => {});
+        }
+      },
+
+      /* --------------------------- sync retry ---------------------------- */
+      retrySync: async () => {
+        const { user, garments, looks, _syncState } = get();
+        if (!user || user.isDemo) return; // Skip for demo/mock mode
+        
+        let failedCount = 0;
+        const maxRetries = 3;
+        
+        // Retry garments with pending/error status
+        const itemsToRetry = [..._syncState.pendingGarments, ..._syncState.errorGarments];
+        for (const id of itemsToRetry) {
+          const garment = garments.find(g => g.id === id);
+          if (!garment) continue;
+          
+          for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+              await insertGarmentRow(user.id, garment);
+              set((s) => ({
+                garments: s.garments.map(g => 
+                  g.id === id ? { ...g, syncStatus: "synced" as const } : g
+                ),
+                _syncState: {
+                  ...s._syncState,
+                  pendingGarments: new Set(s._syncState.pendingGarments).delete(id) as Set<string>,
+                  errorGarments: new Set(s._syncState.errorGarments).delete(id) as Set<string>,
+                }
+              }));
+              break;
+            } catch (error: any) {
+              if (attempt === maxRetries - 1) {
+                failedCount++;
+                set((s) => ({
+                  _syncState: {
+                    ...s._syncState,
+                    errorGarments: new Set(s._syncState.errorGarments).add(id),
+                  }
+                }));
+              }
+              // Small delay between retries
+              await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+            }
+          }
+        }
+        
+        // Retry looks with pending/error status
+        const looksToRetry = [..._syncState.pendingLooks, ..._syncState.errorLooks];
+        for (const id of looksToRetry) {
+          const look = looks.find(l => l.id === id);
+          if (!look) continue;
+          
+          for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+              await insertOutfitRow(user.id, look);
+              set((s) => ({
+                looks: s.looks.map(l => 
+                  l.id === id ? { ...l, syncStatus: "synced" as const } : l
+                ),
+                _syncState: {
+                  ...s._syncState,
+                  pendingLooks: new Set(s._syncState.pendingLooks).delete(id) as Set<string>,
+                  errorLooks: new Set(s._syncState.errorLooks).delete(id) as Set<string>,
+                }
+              }));
+              break;
+            } catch (error: any) {
+              if (attempt === maxRetries - 1) {
+                failedCount++;
+                set((s) => ({
+                  _syncState: {
+                    ...s._syncState,
+                    errorLooks: new Set(s._syncState.errorLooks).add(id),
+                  }
+                }));
+              }
+              // Small delay between retries
+              await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+            }
+          }
+        }
+        
+        // Show notification if any sync attempts failed
+        if (failedCount > 0) {
+          get().notify(`${failedCount} item${failedCount > 1 ? 's' : ''} haven't synced yet`, "err");
         }
       },
 
@@ -501,7 +693,20 @@ export const useAppStore = create<AppStore>()(
         ownerId: s.ownerId,
         onboardedUsers: s.onboardedUsers,
         stylePrefs: s.stylePrefs,
+        _syncState: {
+          pendingGarments: Array.from(s._syncState.pendingGarments),
+          pendingLooks: Array.from(s._syncState.pendingLooks),
+          errorGarments: Array.from(s._syncState.errorGarments),
+          errorLooks: Array.from(s._syncState.errorLooks),
+        },
       }),
     }
   )
 );
+
+// Set up online event listener for auto-retry when connection is restored
+if (typeof window !== "undefined") {
+  window.addEventListener("online", () => {
+    useAppStore.getState().retrySync();
+  });
+}
