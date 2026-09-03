@@ -37,6 +37,7 @@ export interface Garment {
   kind?: AccessoryKind; // only for accessories
   photo?: string; // compressed data-URL (max ~1MB)
   createdAt: number;
+  syncStatus?: "synced" | "pending" | "error";
 }
 
 export type Occasion = "casual" | "work" | "date" | "gym" | "party";
@@ -79,7 +80,7 @@ export interface Outfit {
   accessory?: Garment;
 }
 
-export type StyleEngine = "gemini" | "heuristic";
+export type StyleEngine = "gemini" | "heuristic" | "manual";
 
 export interface StyleResult {
   outfit: Outfit;
@@ -99,6 +100,7 @@ export interface SavedLook {
   /** e.g. ["mild", "dry"] — maps to outfits.weather_tags in Postgres */
   weatherTags?: string[];
   createdAt: number;
+  syncStatus?: "synced" | "pending" | "error";
 }
 
 export interface ToastMsg {
