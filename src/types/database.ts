@@ -118,6 +118,7 @@ export interface Database {
           weather_tags: string[];
           occasion: string;
           rationale: string | null;
+          tags: string[];
           created_at: string;
         };
         Insert: {
@@ -128,6 +129,7 @@ export interface Database {
           weather_tags?: string[];
           occasion?: string;
           rationale?: string | null;
+          tags?: string[];
           created_at?: string;
         };
         Update: {
@@ -138,6 +140,7 @@ export interface Database {
           weather_tags?: string[];
           occasion?: string;
           rationale?: string | null;
+          tags?: string[];
           created_at?: string;
         };
         Relationships: [

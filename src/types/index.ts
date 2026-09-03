@@ -99,6 +99,8 @@ export interface SavedLook {
   engine: StyleEngine;
   /** e.g. ["mild", "dry"] — maps to outfits.weather_tags in Postgres */
   weatherTags?: string[];
+  /** e.g. ["workwear", "summer"] — additive tags for filtering */
+  tags?: string[];
   createdAt: number;
   syncStatus?: "synced" | "pending" | "error";
 }

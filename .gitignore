@@ -1,8 +1,6 @@
 ```
-# Build artifacts
-dist/
-build/
-
-# Dependencies
 node_modules/
+*.log
+.env
+.env.local
 ```
