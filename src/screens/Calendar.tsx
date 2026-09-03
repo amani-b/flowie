@@ -35,11 +35,32 @@ function getWeekDates(baseDate: Date = new Date()): Date[] {
   return dates;
 }
 
+function getMonthDates(baseDate: Date = new Date()): Date[] {
+  const year = baseDate.getFullYear();
+  const month = baseDate.getMonth();
+  const firstDayOfMonth = new Date(year, month, 1);
+  const lastDayOfMonth = new Date(year, month + 1, 0);
+  
+  // Start from Monday of the week containing the 1st
+  const startDay = firstDayOfMonth.getDay();
+  const startDate = new Date(firstDayOfMonth);
+  startDate.setDate(startDate.getDate() + (startDay === 0 ? -6 : 1 - startDay));
+  
+  const dates: Date[] = [];
+  for (let i = 0; i < 42; i++) { // 6 weeks x 7 days
+    const d = new Date(startDate);
+    d.setDate(startDate.getDate() + i);
+    dates.push(d);
+  }
+  return dates;
+}
+
 function formatDateKey(date: Date): string {
   return date.toISOString().split("T")[0];
 }
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 interface ScheduleSheetProps {
   date: Date;
@@ -142,35 +163,70 @@ function ScheduleSheet({
   );
 }
 
+// Group schedules by month for history view
+function groupSchedulesByMonth(schedules: Array<{ date: Date; look: SavedLook }>) {
+  const groups = new Map<string, Array<{ date: Date; look: SavedLook }>>();
+  schedules.forEach((item) => {
+    const key = item.date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(item);
+  });
+  return Array.from(groups.entries());
+}
+
 export default function CalendarView() {
   const looks = useAppStore((s) => s.looks);
+  const schedules = useAppStore((s) => s.schedules);
+  const scheduleLook = useAppStore((s) => s.scheduleLook);
+  const clearSchedule = useAppStore((s) => s.clearSchedule);
   const setTab = useAppStore((s) => s.setTab);
 
+  const [viewMode, setViewMode] = useState<CalendarViewMode>("week");
   const [weekOffset, setWeekOffset] = useState(0);
+  const [monthOffset, setMonthOffset] = useState(0);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
 
   const weekDates = getWeekDates(new Date(Date.now() + weekOffset * 7 * 86_400_000));
+  const monthDates = getMonthDates(new Date(new Date().setMonth(new Date().getMonth() + monthOffset)));
   const today = formatDateKey(new Date());
 
-  // Mock schedules — in Phase 2 this would come from the schedules table
-  const [schedules, setSchedules] = useState<Record<string, string>>({});
+  // Build a map of date -> look for quick lookup
+  const scheduleMap = useMemo(() => {
+    const map = new Map<string, SavedLook>();
+    schedules.forEach((sch) => {
+      const look = looks.find((l) => l.id === sch.outfitId);
+      if (look) map.set(sch.scheduledDate, look);
+    });
+    return map;
+  }, [schedules, looks]);
 
-  const getLookForDate = (dateKey: string) =>
-    looks.find((l) => l.id === schedules[dateKey]) || null;
+  const getLookForDate = (dateKey: string) => scheduleMap.get(dateKey) || null;
 
   const handleAssign = (dateKey: string, lookId: string) => {
-    setSchedules((prev) => ({ ...prev, [dateKey]: lookId }));
+    scheduleLook(dateKey, lookId);
   };
 
   const handleClear = (dateKey: string) => {
-    setSchedules((prev) => {
-      const next = { ...prev };
-      delete next[dateKey];
-      return next;
-    });
+    clearSchedule(dateKey);
   };
 
-  const hasAnySchedules = Object.keys(schedules).length > 0;
+  // History: past schedules only (today or earlier), reverse chronological
+  const historyItems = useMemo(() => {
+    const now = new Date();
+    now.setHours(23, 59, 59, 999); // Include today
+    const items: Array<{ date: Date; look: SavedLook }> = [];
+    schedules.forEach((sch) => {
+      const schDate = new Date(sch.scheduledDate);
+      if (schDate <= now) {
+        const look = looks.find((l) => l.id === sch.outfitId);
+        if (look) items.push({ date: schDate, look });
+      }
+    });
+    items.sort((a, b) => b.date.getTime() - a.date.getTime());
+    return groupSchedulesByMonth(items);
+  }, [schedules, looks]);
+
+  const hasAnySchedules = schedules.length > 0;
 
   return (
     <div className="px-4 pb-44 pt-4">
@@ -180,147 +236,297 @@ export default function CalendarView() {
           <h1 className="font-display text-[27px] font-extrabold tracking-tight">Calendar</h1>
         </div>
         <span className="mb-1.5 rounded-full border border-line bg-card px-2.5 py-1 text-[11px] font-extrabold text-mut">
-          Week of {weekDates[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          {viewMode === "week" 
+            ? `Week of ${weekDates[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+            : viewMode === "month"
+            ? `${MONTH_NAMES[new Date().getMonth()]} ${new Date().getFullYear()}`
+            : `${historyItems.reduce((sum, [, items]) => sum + items.length, 0)} worn`}
         </span>
       </header>
 
-      {/* Week navigation */}
-      <div className="mt-4 flex items-center justify-between">
-        <button
-          onClick={() => setWeekOffset((o) => o - 1)}
-          className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-card text-mut transition active:scale-95"
-          aria-label="Previous week"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-        <button
-          onClick={() => setWeekOffset(0)}
-          className="rounded-full border border-line bg-card px-3 py-1.5 text-[11px] font-extrabold text-mut transition active:scale-95"
-        >
-          Today
-        </button>
-        <button
-          onClick={() => setWeekOffset((o) => o + 1)}
-          className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-card text-mut transition active:scale-95"
-          aria-label="Next week"
-        >
-          <ChevronRight className="h-5 w-5" />
-        </button>
-      </div>
-
-      {/* Week grid */}
-      <div className="mt-4 grid grid-cols-7 gap-1.5">
-        {weekDates.map((d) => {
-          const key = formatDateKey(d);
-          const isToday = key === today;
-          const scheduledLook = getLookForDate(key);
+      {/* View mode toggle */}
+      <div className="mt-4 flex rounded-[14px] border border-line bg-bgdeep p-1">
+        {(["week", "month", "history"] as CalendarViewMode[]).map((mode) => {
+          const active = viewMode === mode;
           return (
             <button
-              key={key}
-              onClick={() => setSelectedDate(d)}
+              key={mode}
+              onClick={() => setViewMode(mode)}
               className={cn(
-                "flex flex-col items-center rounded-[14px] border p-2 transition active:scale-95",
-                isToday
-                  ? "border-acc bg-accsoft"
-                  : scheduledLook
-                    ? "border-acc/40 bg-card"
-                    : "border-line bg-card"
+                "flex flex-1 items-center justify-center rounded-[10px] px-3 py-2 text-[12.5px] font-extrabold transition-all",
+                active ? "bg-card text-ink shadow-sm" : "text-mut hover:text-ink"
               )}
             >
-              <span
-                className={cn(
-                  "text-[9px] font-extrabold",
-                  isToday ? "text-acc" : "text-mut"
-                )}
-              >
-                {DAY_NAMES[d.getDay() === 0 ? 6 : d.getDay() - 1]}
-              </span>
-              <span
-                className={cn(
-                  "mt-0.5 flex h-7 w-7 items-center justify-center rounded-full text-[12px] font-extrabold",
-                  isToday
-                    ? "bg-acc text-accink"
-                    : scheduledLook
-                      ? "bg-accsoft text-acc"
-                      : "text-ink"
-                )}
-              >
-                {d.getDate()}
-              </span>
-              {scheduledLook && (
-                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-acc" />
-              )}
+              {mode.charAt(0).toUpperCase() + mode.slice(1)}
             </button>
           );
         })}
       </div>
 
-      {/* Scheduled looks preview */}
-      <div className="mt-5">
-        <div className="mb-2.5 flex items-center justify-between px-1">
-          <p className="label-micro">This week's lineup</p>
-          {hasAnySchedules && (
-            <span className="text-[10px] font-extrabold text-mut">
-              {Object.keys(schedules).length} / 7 days planned
-            </span>
-          )}
-        </div>
-
-        {!hasAnySchedules ? (
-          <div className="card flex flex-col items-center rounded-[20px] px-6 py-10 text-center">
-            <Calendar className="mb-2 h-10 w-10 text-mut opacity-50" />
-            <p className="text-[14px] font-extrabold">Nothing scheduled yet</p>
-            <p className="mt-1 max-w-[240px] text-[12px] font-medium text-mut">
-              Tap a day above to assign an outfit from your lookbook.
-            </p>
+      {/* Week navigation */}
+      {viewMode === "week" && (
+        <>
+          <div className="mt-4 flex items-center justify-between">
             <button
-              onClick={() => setTab("looks")}
-              className="mt-3 rounded-full border border-line px-4 py-2 text-[12px] font-extrabold text-mut transition active:scale-95"
+              onClick={() => setWeekOffset((o) => o - 1)}
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-card text-mut transition active:scale-95"
+              aria-label="Previous week"
             >
-              Browse looks
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => setWeekOffset(0)}
+              className="rounded-full border border-line bg-card px-3 py-1.5 text-[11px] font-extrabold text-mut transition active:scale-95"
+            >
+              Today
+            </button>
+            <button
+              onClick={() => setWeekOffset((o) => o + 1)}
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-card text-mut transition active:scale-95"
+              aria-label="Next week"
+            >
+              <ChevronRight className="h-5 w-5" />
             </button>
           </div>
-        ) : (
-          <div className="space-y-2">
+
+          {/* Week grid */}
+          <div className="mt-4 grid grid-cols-7 gap-1.5">
             {weekDates.map((d) => {
               const key = formatDateKey(d);
-              const look = getLookForDate(key);
-              if (!look) return null;
+              const isToday = key === today;
+              const scheduledLook = getLookForDate(key);
               return (
-                <motion.div
+                <button
                   key={key}
-                  initial={{ opacity: 0, x: -12 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="card flex items-center gap-3 rounded-[16px] p-2.5"
+                  onClick={() => setSelectedDate(d)}
+                  className={cn(
+                    "flex flex-col items-center rounded-[14px] border p-2 transition active:scale-95",
+                    isToday
+                      ? "border-acc bg-accsoft"
+                      : scheduledLook
+                        ? "border-acc/40 bg-card"
+                        : "border-line bg-card"
+                  )}
                 >
-                  <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-[10px] bg-accsoft">
-                    <span className="text-[9px] font-extrabold text-acc">
-                      {DAY_NAMES[d.getDay() === 0 ? 6 : d.getDay() - 1]}
-                    </span>
-                    <span className="text-[13px] font-extrabold text-acc">
-                      {d.getDate()}
-                    </span>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[12.5px] font-extrabold">{look.name}</p>
-                    <p className="text-[10px] font-bold text-mut">
-                      {OCCASION_META[look.occasion].label}
-                    </p>
-                  </div>
-                  <Avatar outfit={look.outfit} className="h-14 w-14" />
-                  <button
-                    onClick={() => handleClear(key)}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-mut transition hover:bg-dangersoft hover:text-danger active:scale-95"
-                    aria-label="Remove"
+                  <span
+                    className={cn(
+                      "text-[9px] font-extrabold",
+                      isToday ? "text-acc" : "text-mut"
+                    )}
                   >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </motion.div>
+                    {DAY_NAMES[d.getDay() === 0 ? 6 : d.getDay() - 1]}
+                  </span>
+                  <span
+                    className={cn(
+                      "mt-0.5 flex h-7 w-7 items-center justify-center rounded-full text-[12px] font-extrabold",
+                      isToday
+                        ? "bg-acc text-accink"
+                        : scheduledLook
+                          ? "bg-accsoft text-acc"
+                          : "text-ink"
+                    )}
+                  >
+                    {d.getDate()}
+                  </span>
+                  {scheduledLook && (
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-acc" />
+                  )}
+                </button>
               );
             })}
           </div>
-        )}
-      </div>
+        </>
+      )}
+
+      {/* Month view */}
+      {viewMode === "month" && (
+        <>
+          <div className="mt-4 flex items-center justify-between">
+            <button
+              onClick={() => setMonthOffset((o) => o - 1)}
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-card text-mut transition active:scale-95"
+              aria-label="Previous month"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => setMonthOffset(0)}
+              className="rounded-full border border-line bg-card px-3 py-1.5 text-[11px] font-extrabold text-mut transition active:scale-95"
+            >
+              Today
+            </button>
+            <button
+              onClick={() => setMonthOffset((o) => o + 1)}
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-card text-mut transition active:scale-95"
+              aria-label="Next month"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </button>
+          </div>
+
+          {/* Month grid header */}
+          <div className="mt-4 grid grid-cols-7 gap-1">
+            {DAY_NAMES.map((name) => (
+              <div key={name} className="text-center text-[9px] font-extrabold text-mut">
+                {name}
+              </div>
+            ))}
+          </div>
+
+          {/* Month grid */}
+          <div className="mt-1 grid grid-cols-7 gap-1">
+            {monthDates.map((d, idx) => {
+              const key = formatDateKey(d);
+              const isToday = key === today;
+              const isInMonth = d.getMonth() === new Date().getMonth() + monthOffset;
+              const scheduledLook = getLookForDate(key);
+              return (
+                <button
+                  key={idx}
+                  onClick={() => setSelectedDate(d)}
+                  className={cn(
+                    "relative flex aspect-square flex-col items-center justify-start rounded-[10px] border p-1 transition active:scale-95",
+                    !isInMonth ? "opacity-40" : "",
+                    isToday
+                      ? "border-acc bg-accsoft"
+                      : scheduledLook
+                        ? "border-acc/40 bg-card"
+                        : "border-line bg-card"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "text-[10px] font-extrabold",
+                      isToday ? "text-acc" : isInMonth ? "text-ink" : "text-mut"
+                    )}
+                  >
+                    {d.getDate()}
+                  </span>
+                  {scheduledLook && (
+                    <span className="absolute bottom-1 h-1.5 w-1.5 rounded-full bg-acc" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {/* History view */}
+      {viewMode === "history" && (
+        <div className="mt-4 space-y-4">
+          {historyItems.length === 0 ? (
+            <div className="card flex flex-col items-center rounded-[20px] px-6 py-10 text-center">
+              <Clock className="mb-2 h-10 w-10 text-mut opacity-50" />
+              <p className="text-[14px] font-extrabold">No worn history yet</p>
+              <p className="mt-1 max-w-[240px] text-[12px] font-medium text-mut">
+                Schedule outfits for today or earlier to see them here.
+              </p>
+            </div>
+          ) : (
+            historyItems.map(([monthLabel, items]) => (
+              <div key={monthLabel}>
+                <p className="mb-2 label-micro text-mut">{monthLabel}</p>
+                <div className="space-y-2">
+                  {items.map(({ date, look }) => (
+                    <motion.div
+                      key={date.toISOString() + look.id}
+                      initial={{ opacity: 0, x: -12 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="card flex items-center gap-3 rounded-[16px] p-2.5"
+                    >
+                      <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-[10px] bg-accsoft">
+                        <span className="text-[9px] font-extrabold text-acc">
+                          {DAY_NAMES[date.getDay() === 0 ? 6 : date.getDay() - 1]}
+                        </span>
+                        <span className="text-[13px] font-extrabold text-acc">
+                          {date.getDate()}
+                        </span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[12.5px] font-extrabold">{look.name}</p>
+                        <p className="text-[10px] font-bold text-mut">
+                          {OCCASION_META[look.occasion].label}
+                        </p>
+                      </div>
+                      <Avatar outfit={look.outfit} className="h-14 w-14" />
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* Scheduled looks preview (week view only) */}
+      {viewMode === "week" && (
+        <div className="mt-5">
+          <div className="mb-2.5 flex items-center justify-between px-1">
+            <p className="label-micro">This week's lineup</p>
+            {hasAnySchedules && (
+              <span className="text-[10px] font-extrabold text-mut">
+                {weekDates.filter((d) => scheduleMap.has(formatDateKey(d))).length} / 7 days planned
+              </span>
+            )}
+          </div>
+
+          {!hasAnySchedules ? (
+            <div className="card flex flex-col items-center rounded-[20px] px-6 py-10 text-center">
+              <Calendar className="mb-2 h-10 w-10 text-mut opacity-50" />
+              <p className="text-[14px] font-extrabold">Nothing scheduled yet</p>
+              <p className="mt-1 max-w-[240px] text-[12px] font-medium text-mut">
+                Tap a day above to assign an outfit from your lookbook.
+              </p>
+              <button
+                onClick={() => setTab("looks")}
+                className="mt-3 rounded-full border border-line px-4 py-2 text-[12px] font-extrabold text-mut transition active:scale-95"
+              >
+                Browse looks
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {weekDates.map((d) => {
+                const key = formatDateKey(d);
+                const look = getLookForDate(key);
+                if (!look) return null;
+                return (
+                  <motion.div
+                    key={key}
+                    initial={{ opacity: 0, x: -12 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="card flex items-center gap-3 rounded-[16px] p-2.5"
+                  >
+                    <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-[10px] bg-accsoft">
+                      <span className="text-[9px] font-extrabold text-acc">
+                        {DAY_NAMES[d.getDay() === 0 ? 6 : d.getDay() - 1]}
+                      </span>
+                      <span className="text-[13px] font-extrabold text-acc">
+                        {d.getDate()}
+                      </span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[12.5px] font-extrabold">{look.name}</p>
+                      <p className="text-[10px] font-bold text-mut">
+                        {OCCASION_META[look.occasion].label}
+                      </p>
+                    </div>
+                    <Avatar outfit={look.outfit} className="h-14 w-14" />
+                    <button
+                      onClick={() => handleClear(key)}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-mut transition hover:bg-dangersoft hover:text-danger active:scale-95"
+                      aria-label="Remove"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </motion.div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Detail sheet */}
       {selectedDate && (
