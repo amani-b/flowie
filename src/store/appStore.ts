@@ -379,7 +379,7 @@ export const useAppStore = create<AppStore>()(
             ),
             _syncState: {
               ...s._syncState,
-              pendingGarments: new Set(s._syncState.pendingGarments).delete(id) as Set<string>,
+              pendingGarments: new Set(s._syncState.pendingGarments),
             }
           }));
           return;
@@ -394,7 +394,7 @@ export const useAppStore = create<AppStore>()(
             ),
             _syncState: {
               ...s._syncState,
-              pendingGarments: new Set(s._syncState.pendingGarments).delete(id) as Set<string>,
+              pendingGarments: new Set(s._syncState.pendingGarments),
             }
           }));
         } catch (error: any) {
@@ -405,7 +405,7 @@ export const useAppStore = create<AppStore>()(
             ),
             _syncState: {
               ...s._syncState,
-              pendingGarments: new Set(s._syncState.pendingGarments).delete(id) as Set<string>,
+              pendingGarments: new Set(s._syncState.pendingGarments),
               errorGarments: new Set(s._syncState.errorGarments).add(id),
             }
           }));
@@ -512,7 +512,7 @@ export const useAppStore = create<AppStore>()(
             ),
             _syncState: {
               ...s._syncState,
-              pendingLooks: new Set(s._syncState.pendingLooks).delete(id) as Set<string>,
+              pendingLooks: new Set(s._syncState.pendingLooks),
             }
           }));
           return look;
@@ -527,7 +527,7 @@ export const useAppStore = create<AppStore>()(
             ),
             _syncState: {
               ...s._syncState,
-              pendingLooks: new Set(s._syncState.pendingLooks).delete(id) as Set<string>,
+              pendingLooks: new Set(s._syncState.pendingLooks),
             }
           }));
         } catch (error: any) {
@@ -538,7 +538,7 @@ export const useAppStore = create<AppStore>()(
             ),
             _syncState: {
               ...s._syncState,
-              pendingLooks: new Set(s._syncState.pendingLooks).delete(id) as Set<string>,
+              pendingLooks: new Set(s._syncState.pendingLooks),
               errorLooks: new Set(s._syncState.errorLooks).add(id),
             }
           }));
@@ -577,8 +577,8 @@ export const useAppStore = create<AppStore>()(
                 ),
                 _syncState: {
                   ...s._syncState,
-                  pendingGarments: new Set(s._syncState.pendingGarments).delete(id) as Set<string>,
-                  errorGarments: new Set(s._syncState.errorGarments).delete(id) as Set<string>,
+                  pendingGarments: new Set(s._syncState.pendingGarments),
+                  errorGarments: new Set(s._syncState.errorGarments),
                 }
               }));
               break;
@@ -613,8 +613,8 @@ export const useAppStore = create<AppStore>()(
                 ),
                 _syncState: {
                   ...s._syncState,
-                  pendingLooks: new Set(s._syncState.pendingLooks).delete(id) as Set<string>,
-                  errorLooks: new Set(s._syncState.errorLooks).delete(id) as Set<string>,
+                  pendingLooks: new Set(s._syncState.pendingLooks),
+                  errorLooks: new Set(s._syncState.errorLooks),
                 }
               }));
               break;
