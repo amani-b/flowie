@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Calendar, ChevronLeft, ChevronRight, Clock, Trash2 } from "lucide-react";
 import { useAppStore } from "../store/appStore";
@@ -13,8 +13,10 @@ import { OCCASION_META } from "../lib/utils";
  * Shows a week-at-a-glance with the ability to:
  * - View what's scheduled for each day
  * - Assign an outfit to a date
- * - See worn history
+ * - See worn history (derived from past schedules)
  */
+
+type CalendarViewMode = "week" | "month" | "history";
 
 function getWeekDates(baseDate: Date = new Date()): Date[] {
   const dates: Date[] = [];

@@ -10,6 +10,7 @@ import type {
   Occasion,
   Profile,
   SavedLook,
+  Schedule,
   StylePrefs,
   StyleResult,
   TabId,
@@ -31,9 +32,12 @@ import {
 import {
   deleteGarmentRow,
   deleteOutfitRow,
+  deleteScheduleRow,
+  fetchSchedules,
   fetchUserData,
   insertGarmentRow,
   insertOutfitRow,
+  upsertScheduleRow,
 } from "../services/dataService";
 import { OCCASION_META, uid } from "../lib/utils";
 import { supabase } from "../services/supabaseClient";
@@ -95,6 +99,7 @@ export interface AppStore {
   /* ------------------------------- data ------------------------------- */
   garments: Garment[];
   looks: SavedLook[];
+  schedules: Schedule[];
   weather: WeatherState;
   generation: GenerationState;
   today: StyleResult | null;
@@ -110,6 +115,10 @@ export interface AppStore {
   generateForStudio: (occasion: Occasion) => Promise<void>;
   saveLook: (result: StyleResult, name?: string) => Promise<SavedLook>;
   deleteLook: (id: string) => void;
+  updateLookTags: (id: string, tags: string[]) => void;
+
+  scheduleLook: (date: string, lookId: string) => void;
+  clearSchedule: (date: string) => void;
 
   notify: (text: string, tone?: "ok" | "err") => void;
   clearToast: () => void;
@@ -256,19 +265,25 @@ export const useAppStore = create<AppStore>()(
         const user = get().user;
         if (!user || user.isDemo) return;
         try {
-          const { garments, looks } = await fetchUserData(user.id);
+          const [{ garments, looks }, schedules] = await Promise.all([
+            fetchUserData(user.id),
+            fetchSchedules(user.id),
+          ]);
           // Only apply if this account is still active.
           if (get().user?.id === user.id) {
-            set({ garments, looks });
+            set({ garments, looks, schedules });
           }
         } catch (error: any) {
           console.error("Error in hydrateFromCloud:", error?.message ?? error, error?.status);
           // Retry once after refreshing session
           try {
             await supabase?.auth.getSession();
-            const retryResult = await fetchUserData(user.id);
+            const [retryData, retrySchedules] = await Promise.all([
+              fetchUserData(user.id),
+              fetchSchedules(user.id),
+            ]);
             if (get().user?.id === user.id) {
-              set({ garments: retryResult.garments, looks: retryResult.looks });
+              set({ garments: retryData.garments, looks: retryData.looks, schedules: retrySchedules });
             }
             return;
           } catch (retryError: any) {
@@ -319,6 +334,7 @@ export const useAppStore = create<AppStore>()(
       drawerOpen: false,
       garments: [],
       looks: [],
+      schedules: [],
       weather: { status: "idle", data: null },
       generation: IDLE_GEN,
       today: null,
@@ -553,6 +569,72 @@ export const useAppStore = create<AppStore>()(
           void deleteOutfitRow(id).catch(() => {});
         }
       },
+      updateLookTags: async (id, tags) => {
+        const look = get().looks.find((l) => l.id === id);
+        if (!look) return;
+        const updated: SavedLook = { ...look, tags };
+        set((s) => ({
+          looks: s.looks.map((l) => (l.id === id ? updated : l)),
+        }));
+        const user = get().user;
+        if (!user || user.isDemo) return;
+        try {
+          await insertOutfitRow(user.id, updated);
+        } catch (error: any) {
+          console.error("Error in updateLookTags sync:", error?.message ?? error);
+          get().notify("Tag sync failed — saved locally", "err");
+        }
+      },
+
+      scheduleLook: async (date, lookId) => {
+        // Generate stable UUID for the schedule row
+        const id = crypto.randomUUID();
+        const user = get().user;
+        
+        // Optimistic local update first
+        const newSchedule: Schedule = {
+          id,
+          userId: user?.id ?? "",
+          outfitId: lookId,
+          scheduledDate: date,
+          createdAt: Date.now(),
+        };
+        
+        // Remove any existing schedule for this date (enforce one per day)
+        set((s) => ({
+          schedules: [newSchedule, ...s.schedules.filter(sch => sch.scheduledDate !== date)],
+        }));
+        
+        if (!user || user.isDemo) return;
+        
+        // Sync to cloud in background
+        try {
+          await upsertScheduleRow(user.id, { id, outfitId: lookId, scheduledDate: date });
+        } catch (error: any) {
+          console.error("Error in scheduleLook sync:", error?.message ?? error);
+          get().notify("Schedule sync failed — saved locally", "err");
+        }
+      },
+      
+      clearSchedule: async (date) => {
+        const user = get().user;
+        const scheduleToDelete = get().schedules.find(s => s.scheduledDate === date);
+        
+        // Optimistic local removal
+        set((s) => ({
+          schedules: s.schedules.filter(sch => sch.scheduledDate !== date),
+        }));
+        
+        if (!user || user.isDemo || !scheduleToDelete) return;
+        
+        // Sync to cloud in background
+        try {
+          await deleteScheduleRow(scheduleToDelete.id);
+        } catch (error: any) {
+          console.error("Error in clearSchedule sync:", error?.message ?? error);
+          get().notify("Schedule sync failed — removed locally", "err");
+        }
+      },
 
       /* --------------------------- sync retry ---------------------------- */
       retrySync: async () => {
@@ -646,7 +728,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: "fitflow-store",
-      version: 3,
+      version: 4,
       storage: safeStorage,
       migrate: (persisted, version) => {
         // v1 (Phase 0) → v2: keep user data, add new session fields.
@@ -682,6 +764,18 @@ export const useAppStore = create<AppStore>()(
           };
           return newState as never;
         }
+        // v3 → v4: add schedules array and tags field to looks
+        if (version < 4) {
+          const newState = {
+            ...state,
+            schedules: [] as Schedule[],
+            looks: ((state as any).looks ?? []).map((look: any) => ({
+              ...look,
+              tags: look.tags ?? [],
+            })),
+          };
+          return newState as never;
+        }
         return state as never;
       },
       partialize: (s) => ({
@@ -689,6 +783,7 @@ export const useAppStore = create<AppStore>()(
         units: s.units,
         garments: s.garments.map((g) => ({ ...g, photo: undefined })), // omit base64 photos from localStorage
         looks: s.looks,
+        schedules: s.schedules,
         today: s.today,
         ownerId: s.ownerId,
         onboardedUsers: s.onboardedUsers,

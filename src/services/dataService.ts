@@ -159,6 +159,7 @@ function rowToLook(r: OutfitRow, garments: Garment[]): SavedLook {
     rationale: r.rationale ?? "",
     engine: "heuristic",
     weatherTags: r.weather_tags ?? [],
+    tags: r.tags ?? [],
     createdAt: new Date(r.created_at).getTime(),
   };
 }
@@ -172,6 +173,7 @@ function lookToInsert(userId: string, look: SavedLook): OutfitInsert {
     weather_tags: look.weatherTags ?? [],
     occasion: look.occasion,
     rationale: look.rationale || null,
+    tags: look.tags ?? [],
   };
 }
 
@@ -200,6 +202,48 @@ export async function fetchUserData(
   const garments = ((wRes.data as WardrobeRow[]) ?? []).map(rowToGarment);
   const looks = ((oRes.data as OutfitRow[]) ?? []).map((r) => rowToLook(r, garments));
   return { garments, looks };
+}
+
+export async function fetchSchedules(userId: string) {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("schedules")
+    .select("*")
+    .eq("user_id", userId)
+    .order("scheduled_date", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data as Array<Database["public"]["Tables"]["schedules"]["Row"]>) ?? [];
+}
+
+export async function upsertScheduleRow(
+  userId: string,
+  schedule: { id: string; outfitId: string; scheduledDate: string }
+) {
+  if (!supabase) return;
+  // Enforce "one outfit per day" at app level: delete any existing for this user+date first
+  await supabase
+    .from("schedules")
+    .delete()
+    .eq("user_id", userId)
+    .eq("scheduled_date", schedule.scheduledDate);
+
+  const { error } = await supabase.from("schedules").upsert(
+    {
+      id: schedule.id,
+      user_id: userId,
+      outfit_id: schedule.outfitId,
+      scheduled_date: schedule.scheduledDate,
+      created_at: new Date().toISOString(),
+    },
+    { onConflict: "id" }
+  );
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteScheduleRow(id: string): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase.from("schedules").delete().eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
 /* ------------------------------ writes ------------------------------ */
