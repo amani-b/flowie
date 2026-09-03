@@ -135,6 +135,7 @@ create table if not exists public.outfits (
   occasion     text not null default 'casual' check (occasion in
                  ('casual', 'work', 'date', 'gym', 'party')),
   rationale    text,                                     -- stylist commentary
+  tags         text[] not null default '{}',             -- e.g. {workwear, summer}
   created_at   timestamptz not null default now()
 );
 
