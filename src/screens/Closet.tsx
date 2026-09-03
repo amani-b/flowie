@@ -642,10 +642,11 @@ export default function Closet() {
 
   const filtered = garments.filter((g) => {
     const okCat = filter === "all" || g.category === filter;
+    const q = query.trim().toLowerCase();
     const okQuery =
-      !query.trim() ||
-      g.name.toLowerCase().includes(query.trim().toLowerCase()) ||
-      g.colorFamily.includes(query.trim().toLowerCase());
+      !q ||
+      g.name.toLowerCase().includes(q) ||
+      g.colorFamily.toLowerCase().includes(q);
     return okCat && okQuery;
   });
 
