@@ -8,7 +8,7 @@ import type { AuthUser, Garment, Outfit, SavedLook } from "../types";
 
 export const DEMO_USER: AuthUser = {
   id: "demo-ava-0001",
-  email: "ava@fitflow.app",
+  email: "ava@flowie.app",
   name: "Ava Fields",
   isDemo: true,
 };

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowRight, Inbox, Loader2, MailCheck, ShieldCheck } from "lucide-react";
+import { ArrowRight, Inbox, Loader2, MailCheck } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { appMode, signIn, signInWithGoogle, signUp } from "../services/authService";
 import { cn, firstName } from "../lib/utils";
@@ -114,10 +114,7 @@ export default function AuthScreen() {
                 isMock ? "bg-amber" : "bg-acc"
               )}
             />
-            {isMock ? "DEMO MODE · ON-DEVICE" : "SUPABASE CONNECTED"}
-          </span>
-          <span className="ml-auto flex items-center gap-1 text-[9.5px] font-extrabold tracking-[0.14em] text-mut">
-            <ShieldCheck className="h-3.5 w-3.5" /> RLS SECURED
+            {isMock ? "DEMO MODE" : "WELCOME"}
           </span>
         </div>
 
@@ -130,10 +127,7 @@ export default function AuthScreen() {
           <LogoMark className="h-14 w-14 text-ink" />
         </motion.div>
         <h1 className="mt-4 font-display text-[42px] font-extrabold leading-[0.95] tracking-tight">
-          FitFlow
-          <span className="ml-2 rounded-lg bg-accsoft px-2 py-1 align-middle text-[12px] tracking-[0.22em] text-acc">
-            AI
-          </span>
+          Flowie
         </h1>
         <p className="mt-2.5 max-w-[300px] text-[14px] font-semibold leading-relaxed text-mut">
           A stylist that reads the sky, then raids your closet.
@@ -334,8 +328,8 @@ export default function AuthScreen() {
         className="mt-3 text-center text-[10px] font-bold leading-relaxed text-mut"
       >
         {isMock
-          ? "No Supabase keys detected — accounts are simulated on this device. Add VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY for real auth."
-          : "Email auth + Google OAuth via Supabase · schema in /supabase/schema.sql · OAuth wiring checklist in Settings"}
+          ? "Demo accounts live on this device only."
+          : "Your closet stays synced across your devices."}
       </motion.p>
     </div>
   );

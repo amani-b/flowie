@@ -1,5 +1,5 @@
 /* ------------------------------------------------------------------ */
-/*  FitFlow AI — shared domain types (Phase 1)                         */
+/*  Flowie — shared domain types                                         */
 /* ------------------------------------------------------------------ */
 
 export type ThemeMode = "light" | "dark";
@@ -31,6 +31,8 @@ export interface Garment {
   color: string; // hex (primary/dominant color, same as colors[0])
   colors: string[]; // 1-3 hex values, ordered by visual prominence
   pattern: "solid" | "striped" | "colorblock" | "other";
+  /** per-color pixel share, same order as `colors` — drives avatar proportions. Local-only, not synced. */
+  patternMix?: number[];
   colorFamily: ColorFamily;
   warmth: Warmth;
   formality: Formality;
@@ -88,6 +90,10 @@ export interface StyleResult {
   engine: StyleEngine;
   score: number;
   occasion: Occasion;
+  /** free-text request handling: was the text actually used? */
+  usedPrompt?: boolean;
+  /** one-line note about how the request affected the result (or why not) */
+  promptNote?: string;
 }
 
 export interface SavedLook {

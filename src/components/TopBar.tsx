@@ -15,10 +15,7 @@ export default function TopBar() {
           <div className="flex items-center gap-2">
             <LogoMark className="h-[22px] w-[22px] text-ink" />
             <span className="font-display text-[17px] font-extrabold tracking-tight">
-              FitFlow
-            </span>
-            <span className="rounded-md bg-accsoft px-1.5 py-0.5 text-[9px] font-extrabold tracking-[0.18em] text-acc">
-              AI
+              Flowie
             </span>
           </div>
           <div className="flex items-center gap-1.5">

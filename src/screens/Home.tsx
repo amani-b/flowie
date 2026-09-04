@@ -116,7 +116,7 @@ export default function Home() {
         </div>
         <span className="mb-1 flex items-center gap-1.5 rounded-full border border-line bg-card px-2.5 py-1 text-[10px] font-extrabold tracking-[0.12em] text-mut">
           <Sparkles className="h-3 w-3 text-acc" />
-          {geminiReady ? "GEMINI" : "HEURISTIC"}
+          {geminiReady ? "SMART" : "OFFLINE"}
         </span>
       </motion.header>
 
@@ -170,11 +170,11 @@ export default function Home() {
                   {wx.source === "live" ? (
                     <span className="flex items-center gap-1.5 rounded-full bg-accsoft px-2.5 py-1 text-[9.5px] font-extrabold tracking-[0.14em] text-acc">
                       <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-acc" />
-                      LIVE · OPEN-METEO
+                      LIVE
                     </span>
                   ) : (
                     <span className="rounded-full bg-ambersoft px-2.5 py-1 text-[9.5px] font-extrabold tracking-[0.14em] text-amber">
-                      SIMULATED · OFFLINE
+                      OFFLINE
                     </span>
                   )}
                   <button
@@ -239,11 +239,6 @@ export default function Home() {
       >
         <div className="mb-3 flex items-center justify-between">
           <p className="label-micro">Today's look</p>
-          {today && (
-            <span className="text-[10px] font-extrabold tracking-[0.14em] text-mut">
-              {today.engine === "gemini" ? "GEMINI 2.5 FLASH" : "ON-DEVICE"}
-            </span>
-          )}
         </div>
 
         {garments.length === 0 ? (

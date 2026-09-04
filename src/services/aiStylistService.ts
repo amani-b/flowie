@@ -1,8 +1,9 @@
 import type { Garment, Category, ColorFamily, Warmth, Formality } from "../types";
 import { uid, hexToRgb } from "../lib/utils";
+import { detectPattern, rgbToHex, type PixelSample } from "../lib/patternDetect";
 
 /**
- * AI-powered garment tagging service using Gemini 2.5 Flash.
+ * AI-powered garment tagging service using Gemini (flash tier, free).
  * Sends uploaded garment photos to Gemini for structured analysis:
  * category, colors (hex array), pattern, color family, warmth level,
  * formality level, and optional tags.
@@ -13,6 +14,9 @@ import { uid, hexToRgb } from "../lib/utils";
  * - Response is malformed
  */
 
+/** Gemini flash-tier model for tagging + styling (free tier, vision-capable). */
+export const GEMINI_MODEL = "gemini-3.5-flash";
+
 const GEMINI_KEY = (import.meta.env.VITE_GEMINI_API_KEY ?? "").trim();
 export const geminiReady = GEMINI_KEY.length > 0;
 
@@ -21,6 +25,8 @@ export interface TaggingResult {
   category: Category;
   colors: string[]; // 1-3 hex values, most prominent first
   pattern: "solid" | "striped" | "colorblock" | "other";
+  /** share of garment pixels per entry in `colors` (same order, sums to ~1) */
+  patternMix?: number[];
   colorFamily: ColorFamily;
   warmth: Warmth;
   formality: Formality;
@@ -108,24 +114,29 @@ type RGB = { r: number; g: number; b: number };
 const rgbDist = (a: RGB, b: RGB) =>
   Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2);
 
-const clampByte = (v: number) => Math.min(255, Math.max(0, v));
-
-const rgbToHex = (c: RGB) =>
-  `#${[c.r, c.g, c.b].map((v) => clampByte(Math.round(v)).toString(16).padStart(2, "0")).join("")}`;
-
-/** Extract dominant colors (and a rough pattern) from an image using canvas sampling. */
-async function extractColorsFromImage(imageDataUrl: string): Promise<{ colors: string[]; pattern: TaggingResult["pattern"] }> {
+/**
+ * Extract dominant colors and a pattern classification from an image.
+ * Backdrop estimation + pixel filtering happen here (canvas/DOM); the
+ * actual classification lives in the pure, unit-tested
+ * `detectPattern` core (src/lib/patternDetect.ts).
+ */
+export async function extractColorsFromImage(imageDataUrl: string): Promise<{
+  colors: string[];
+  pattern: TaggingResult["pattern"];
+  shares: number[];
+}> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
       if (!ctx) {
-        resolve({ colors: ["#6B7280"], pattern: "solid" });
+        resolve({ colors: ["#6B7280"], pattern: "solid", shares: [1] });
         return;
       }
-      // Downscale for performance
-      const maxDim = 64;
+      // Downscale for performance — 128px keeps narrow stripes resolvable
+      // (64px blurs them into the background tone entirely).
+      const maxDim = 128;
       const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
       const w = Math.max(1, Math.round(img.width * scale));
       const h = Math.max(1, Math.round(img.height * scale));
@@ -142,6 +153,15 @@ async function extractColorsFromImage(imageDataUrl: string): Promise<{ colors: s
       const pixelAt = (x: number, y: number): RGB => {
         const i = (y * w + x) * 4;
         return { r: pixels[i], g: pixels[i + 1], b: pixels[i + 2] };
+      };
+      const isGarmentPx = (r: number, g: number, b: number, a: number): boolean => {
+        if (a < 128) return false;
+        if (backdrop && rgbDist({ r, g, b }, backdrop) < 42) return false;
+        // Safety net when no clear backdrop was detected: pure white
+        // studio blowout right at the edge of exposure is still almost
+        // never the garment itself.
+        if (!backdrop && r > 250 && g > 250 && b > 250) return false;
+        return true;
       };
 
       // Estimate the backdrop from the border pixels: garment photos are
@@ -174,89 +194,48 @@ async function extractColorsFromImage(imageDataUrl: string): Promise<{ colors: s
         if (agree / border.length > 0.6) backdrop = mean;
       }
 
-      // Quantize pixels into color bins, skipping backdrop and transparent
-      // pixels. Bins keep a running average so the final hex reflects the
-      // true sampled color, not just the bucket floor.
-      const bucket = 28;
-      const bins = new Map<string, { r: number; g: number; b: number; count: number }>();
-
-      for (let i = 0; i < pixels.length; i += 4) {
-        const r = pixels[i];
-        const g = pixels[i + 1];
-        const b = pixels[i + 2];
-        const a = pixels[i + 3];
-        if (a < 128) continue;
-
-        const px: RGB = { r, g, b };
-        if (backdrop && rgbDist(px, backdrop) < 42) continue;
-        // Safety net when no clear backdrop was detected: pure white
-        // studio blowout right at the edge of exposure is still almost
-        // never the garment itself.
-        if (!backdrop && r > 250 && g > 250 && b > 250) continue;
-
-        const key = `${Math.floor(r / bucket)},${Math.floor(g / bucket)},${Math.floor(b / bucket)}`;
-        const existing = bins.get(key);
-        if (existing) {
-          existing.r += r;
-          existing.g += g;
-          existing.b += b;
-          existing.count += 1;
-        } else {
-          bins.set(key, { r, g, b, count: 1 });
+      // Collect garment-only samples (backdrop/transparent skipped) with
+      // normalized positions, then classify with the tested pure core.
+      const pos = (x: number, y: number) => ({
+        x: x / Math.max(1, w - 1),
+        y: y / Math.max(1, h - 1),
+      });
+      const samples: PixelSample[] = [];
+      const unfiltered: PixelSample[] = [];
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          const r = pixels[i];
+          const g = pixels[i + 1];
+          const b = pixels[i + 2];
+          const a = pixels[i + 3];
+          if (a < 128) continue;
+          unfiltered.push({ r, g, b, ...pos(x, y) });
+          if (!isGarmentPx(r, g, b, a)) continue;
+          samples.push({ r, g, b, ...pos(x, y) });
         }
       }
+      // Low-yield guard: white/cream garments on near-white backdrops get
+      // eaten by subtraction (white stripes read as "background"). If the
+      // filter kept less than ~a third of the frame, the "backdrop" is
+      // probably the garment itself — analyze everything instead.
+      const usable = samples.length >= w * h * 0.35 ? samples : unfiltered;
 
-      if (bins.size === 0) {
-        resolve({ colors: ["#6B7280"], pattern: "solid" });
+      if (usable.length === 0) {
+        resolve({ colors: ["#6B7280"], pattern: "solid", shares: [1] });
         return;
       }
 
-      const rawBins = Array.from(bins.values()).map((v) => ({
-        r: v.r / v.count,
-        g: v.g / v.count,
-        b: v.b / v.count,
-        count: v.count,
-      }));
-      rawBins.sort((a, b) => b.count - a.count);
-
-      // Merge near-duplicate bins (anti-aliasing, shadow, and highlight
-      // noise around a single true garment color) so a genuinely solid
-      // garment doesn't get misread as a multi-color pattern.
-      const merged: typeof rawBins = [];
-      for (const bin of rawBins) {
-        const target = merged.find((m) => rgbDist(m, bin) < 34);
-        if (target) {
-          const total = target.count + bin.count;
-          target.r = (target.r * target.count + bin.r * bin.count) / total;
-          target.g = (target.g * target.count + bin.g * bin.count) / total;
-          target.b = (target.b * target.count + bin.b * bin.count) / total;
-          target.count = total;
-        } else {
-          merged.push({ ...bin });
-        }
-      }
-      merged.sort((a, b) => b.count - a.count);
-
-      const top = merged.slice(0, 3);
-      const colors = top.map(rgbToHex);
-
-      // Detect pattern based on color distribution. The runner-up color
-      // must carry real weight AND be visually distinct from the dominant
-      // one — otherwise it's shading/noise on what is really a solid piece.
-      let pattern: TaggingResult["pattern"] = "solid";
-      const [first, second, third] = top;
-      if (first && second) {
-        const distinct = rgbDist(first, second) > 38;
-        const significant = second.count > first.count * 0.3;
-        if (distinct && significant) {
-          const hasThird = !!third && rgbDist(third, first) > 38 && third.count > first.count * 0.18;
-          pattern = hasThird ? "colorblock" : "striped";
-        }
-      }
-
-      resolve({ colors: colors.length > 0 ? colors : ["#6B7280"], pattern });
+      const analysis = detectPattern(usable);
+      const colors = analysis.colors.map(rgbToHex);
+      const shares = analysis.colors.map((c) => c.share);
+      resolve({
+        colors: colors.length > 0 ? colors : ["#6B7280"],
+        pattern: analysis.pattern,
+        shares: shares.length > 0 ? shares : [1],
+      });
     };
-    img.onerror = () => resolve({ colors: ["#6B7280"], pattern: "solid" });
+    img.onerror = () => resolve({ colors: ["#6B7280"], pattern: "solid", shares: [1] });
     img.src = imageDataUrl;
   });
 }
@@ -282,12 +261,26 @@ export async function tagGarmentHeuristic(file: File, imageDataUrl?: string): Pr
   // Use actual image color extraction instead of filename guessing
   let colors = ["#6B7280"];
   let pattern: TaggingResult["pattern"] = "solid";
+  let patternMix: number[] | undefined;
+  // Honest confidence: the fallback can sample real pixels but can't see
+  // structure the way a vision model can — solid-with-dominant-color is
+  // the only high-confidence call it gets to make.
+  let confidence = 0.5;
 
   if (imageDataUrl) {
     try {
       const extracted = await extractColorsFromImage(imageDataUrl);
       colors = extracted.colors;
       pattern = extracted.pattern;
+      patternMix = extracted.shares;
+      confidence =
+        pattern === "solid" && (extracted.shares[0] ?? 0) >= 0.9
+          ? 0.7
+          : pattern === "solid"
+            ? 0.6
+            : pattern === "other"
+              ? 0.55
+              : 0.65;
     } catch (e) {
       console.warn("Color extraction failed, using fallback:", e);
     }
@@ -302,22 +295,23 @@ export async function tagGarmentHeuristic(file: File, imageDataUrl?: string): Pr
     category: guessCategory(safeName),
     colors,
     pattern,
+    patternMix,
     colorFamily,
     warmth: guessWarmth(safeName),
     formality: guessFormality(safeName),
     tags: [],
-    confidence: 0.6,
+    confidence,
   };
 }
 
 async function viaGemini(imageDataUrl: string): Promise<TaggingResult> {
   const prompt =
-    `Analyze this garment photo and return ONLY valid JSON with this exact structure:\n` +
+    `You are a precise garment analyst. Look at this clothing photo and return ONLY valid JSON:\n` +
     `{"name":"brief descriptive name","category":"one of: top/bottom/dress/outerwear/shoes/accessory","colors":["#RRGGBB", ...],"pattern":"solid|striped|colorblock|other","colorFamily":"one of: neutral/warm/cool/earth/accent","warmth":1-3,"formality":1-3,"tags":["optional keywords"]}\n` +
-    `Be precise. Category must match exactly one option. colors: array of 1-3 hex values (most prominent first). pattern: solid/striped/colorblock/other. Warmth: 1=light/summer, 2=mid-season, 3=heavy/winter. Formality: 1=casual, 2=smart, 3=formal.`;
+    `Rules. Category must match exactly one option. colors: 1-3 hex values of the ACTUAL garment fabric (most prominent first) — describe the dominant color, then any real secondary colors; ignore the photo backdrop, hanger, shadows and shading gradients. pattern: classify honestly — "solid" for a plain single-color garment (shadows, folds and texture are still solid), "striped" ONLY for clear repeating stripes, "colorblock" for large distinct color regions, "other" for plaid/checks/florals/graphics/dots/prints. When in doubt between solid and patterned, choose solid. Warmth: 1=light/summer, 2=mid-season, 3=heavy/winter. Formality: 1=casual, 2=smart, 3=formal.`;
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -384,13 +378,52 @@ async function viaGemini(imageDataUrl: string): Promise<TaggingResult> {
 }
 
 /**
+ * Pixel-truth clamp: when the sampled pixels show one color owning the
+ * garment (>=90%), a patterned label is a hallucination — force solid and
+ * keep the sampled colors. Vision models occasionally read shading or
+ * texture as pattern; pixels don't lie about area share.
+ */
+function clampPatternToPixels(
+  t: TaggingResult,
+  pixels: { colors: string[]; shares: number[] }
+): TaggingResult {
+  const dominantShare = pixels.shares[0] ?? 0;
+  if (dominantShare >= 0.9 && t.pattern !== "solid") {
+    return { ...t, pattern: "solid", colors: pixels.colors, patternMix: pixels.shares };
+  }
+  return t;
+}
+
+/**
  * Main entry point: analyze a garment photo.
  * Returns structured tagging data for user confirmation before saving.
  */
 export async function tagGarmentPhoto(imageDataUrl: string, fileName: string): Promise<TaggingResult> {
   if (geminiReady) {
     try {
-      return await viaGemini(imageDataUrl);
+      const [tagged, pixels] = await Promise.all([
+        viaGemini(imageDataUrl),
+        // Pixel ground truth in parallel: cheap, local, no extra API cost.
+        extractColorsFromImage(imageDataUrl).catch(() => null),
+      ]);
+      const clamped = pixels ? clampPatternToPixels(tagged, pixels) : tagged;
+      // Always attach the locally measured mix so the avatar renders the
+      // real proportions even when the model only named the colors.
+      if (pixels) {
+        clamped.patternMix = pixels.shares;
+      } else {
+        try {
+          const blob = await fetch(imageDataUrl).then((r) => r.blob());
+          const heur = await tagGarmentHeuristic(
+            new File([blob], fileName, { type: blob.type }),
+            imageDataUrl
+          );
+          clamped.patternMix = heur.patternMix;
+        } catch {
+          /* keep the model result without a mix */
+        }
+      }
+      return clamped;
     } catch (e) {
       console.warn("Gemini tagging failed, falling back to heuristic:", e);
       // Fall through to heuristic
@@ -411,6 +444,7 @@ export function taggingToGarment(t: TaggingResult, imageDataUrl?: string): Garme
     color: t.colors[0], // primary/dominant color
     colors: t.colors,
     pattern: t.pattern,
+    patternMix: t.patternMix,
     colorFamily: t.colorFamily,
     warmth: t.warmth,
     formality: t.formality,

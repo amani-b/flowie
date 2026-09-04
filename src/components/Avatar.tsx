@@ -20,7 +20,40 @@ function getPatternId(g: Garment): string {
   return `pattern-${g.id}-${pattern}`;
 }
 
-/** Render SVG pattern definitions for multi-color garments */
+/** Deterministic PRNG so a garment's print looks identical on every render. */
+function seedFrom(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function mulberry(seed: number): () => number {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Per-color shares normalized to sum to 1 (falls back to even splits). */
+function patternShares(garment: Garment, colors: string[]): number[] {
+  const mix = garment.patternMix;
+  if (mix && mix.length === colors.length && mix.every((v) => v > 0)) {
+    const total = mix.reduce((a, b) => a + b, 0);
+    if (total > 0) return mix.map((v) => v / total);
+  }
+  return colors.map(() => 1 / colors.length);
+}
+
+/** Render SVG pattern definitions for multi-color garments.
+ *  Only the paint changes — every garment silhouette below is untouched.
+ *  Band widths/heights follow the measured pixel shares, and prints use
+ *  the garment's real secondary colors, so the avatar echoes the photo. */
 function renderPatternDefs(garment: Garment) {
   const colors = garment.colors ?? [garment.color];
   const pattern = garment.pattern ?? "solid";
@@ -33,49 +66,80 @@ function renderPatternDefs(garment: Garment) {
   const patternId = getPatternId(garment);
 
   if (pattern === "striped") {
-    // Diagonal stripes pattern
+    // Vertical bands with measured proportions (dominant color first).
+    const shares = patternShares(garment, colors);
+    const W = 36;
+    let x = 0;
+    const bands = shares.map((s, i) => {
+      const w = i === shares.length - 1 ? W - x : Math.max(2, Math.round(W * s));
+      const rect = <rect key={i} x={x} y="0" width={w} height={W} fill={colors[i]} />;
+      x += w;
+      return rect;
+    });
     return (
-      <pattern
-        id={patternId}
-        x="0"
-        y="0"
-        width="16"
-        height="16"
-        patternUnits="userSpaceOnUse"
-        patternTransform="rotate(45)"
-      >
-        <rect x="0" y="0" width="8" height="16" fill={c1} />
-        <rect x="8" y="0" width="8" height="16" fill={c2 || c1} />
+      <pattern id={patternId} x="0" y="0" width={W} height={W} patternUnits="userSpaceOnUse">
+        {bands}
       </pattern>
     );
   }
 
   if (pattern === "colorblock") {
-    // Horizontal blocks pattern
-    if (c3) {
-      return (
-        <pattern id={patternId} x="0" y="0" width="10" height="30" patternUnits="userSpaceOnUse">
-          <rect x="0" y="0" width="10" height="10" fill={c1} />
-          <rect x="0" y="10" width="10" height="10" fill={c2} />
-          <rect x="0" y="20" width="10" height="10" fill={c3} />
-        </pattern>
-      );
-    }
+    // Horizontal bands with measured proportions.
+    const shares = patternShares(garment, colors);
+    const H = 48;
+    let y = 0;
+    const bands = shares.map((s, i) => {
+      const h = i === shares.length - 1 ? H - y : Math.max(3, Math.round(H * s));
+      const rect = <rect key={i} x="0" y={y} width="12" height={h} fill={colors[i]} />;
+      y += h;
+      return rect;
+    });
     return (
-      <pattern id={patternId} x="0" y="0" width="10" height="20" patternUnits="userSpaceOnUse">
-        <rect x="0" y="0" width="10" height="10" fill={c1} />
-        <rect x="0" y="10" width="10" height="10" fill={c2 || c1} />
+      <pattern id={patternId} x="0" y="0" width="12" height={H} patternUnits="userSpaceOnUse">
+        {bands}
       </pattern>
     );
   }
 
-  // For 'other' pattern, use a simple checkerboard-like effect
+  // "other" (plaid / floral / graphic / dots): dominant base with a
+  // deterministic scatter of the real secondary colors — reads as a busy
+  // print instead of a solid, without pretending to know the print type.
+  const rng = mulberry(seedFrom(garment.id));
+  const T = 110;
+  const dots = Array.from({ length: 14 }, (_, i) => {
+    const fill = i % 3 === 2 && c3 ? c3 : c2 || c1;
+    return (
+      <circle
+        key={`d${i}`}
+        cx={6 + rng() * (T - 12)}
+        cy={6 + rng() * (T - 12)}
+        r={2.4 + rng() * 2.2}
+        fill={fill}
+        opacity={0.9}
+      />
+    );
+  });
+  const dashes = Array.from({ length: 5 }, (_, i) => {
+    const fill = i % 2 === 0 ? c2 || c1 : c3 || c2 || c1;
+    return (
+      <rect
+        key={`h${i}`}
+        x={6 + rng() * (T - 18)}
+        y={6 + rng() * (T - 12)}
+        width={9 + rng() * 7}
+        height={2.6}
+        rx={1.3}
+        fill={fill}
+        opacity={0.85}
+        transform={`rotate(${(rng() * 60 - 30).toFixed(1)} ${T / 2} ${T / 2})`}
+      />
+    );
+  });
   return (
-    <pattern id={patternId} x="0" y="0" width="10" height="10" patternUnits="userSpaceOnUse">
-      <rect x="0" y="0" width="5" height="5" fill={c1} />
-      <rect x="5" y="0" width="5" height="5" fill={c2 || c1} />
-      <rect x="0" y="5" width="5" height="5" fill={c2 || c1} />
-      <rect x="5" y="5" width="5" height="5" fill={c3 || c1} />
+    <pattern id={patternId} x="0" y="0" width={T} height={T} patternUnits="userSpaceOnUse">
+      <rect x="0" y="0" width={T} height={T} fill={c1} />
+      {dots}
+      {dashes}
     </pattern>
   );
 }
@@ -250,7 +314,9 @@ export default function Avatar({
     <svg viewBox="0 0 240 440" className={className} aria-hidden>
       {/* Define patterns for multi-color garments */}
       <defs>
-        {garmentsWithPatterns.map((g) => renderPatternDefs(g))}
+        {garmentsWithPatterns.map((g) => (
+          <g key={getPatternId(g)}>{renderPatternDefs(g)}</g>
+        ))}
       </defs>
       <g key={animateKey ?? "static"}>
         {/* ground shadow */}

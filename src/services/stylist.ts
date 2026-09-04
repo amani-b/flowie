@@ -6,16 +6,45 @@ import type {
   StyleResult,
   WeatherNow,
 } from "../types";
-import { BUCKET_META, delay, pick, rand } from "../lib/utils";
+import { BUCKET_META, OCCASION_META, delay, pick, rand } from "../lib/utils";
 
 /* ------------------------------------------------------------------ */
-/*  Gemini 2.5 Flash (Google AI Studio). Without a key — or when the   */
-/*  free-tier quota is exhausted (429) — we fall back to the local     */
-/*  heuristic engine below, so styling always works.                   */
+/*  Gemini flash tier (free). Without a key — or when the free-tier    */
+/*  quota is exhausted (429) — we fall back to the local heuristic     */
+/*  engine below, so styling always works.                             */
 /* ------------------------------------------------------------------ */
+
+import { GEMINI_MODEL } from "./aiStylistService";
 
 const GEMINI_KEY = (import.meta.env.VITE_GEMINI_API_KEY ?? "").trim();
 export const geminiReady = GEMINI_KEY.length > 0;
+
+/* ------------------------- prompt relevance ------------------------ */
+
+export type PromptVerdict =
+  | { kind: "empty" }
+  | { kind: "gibberish" }
+  | { kind: "ok"; text: string };
+
+/**
+ * Coarse local gate for free-text styling requests. Only catches the
+ * obvious cases — empty input and keyboard mashing. Coherent-but-unrelated
+ * text ("explain quantum physics") passes through and is judged by the
+ * model itself, which reports back via `usedPrompt`.
+ */
+export function assessPrompt(raw: string): PromptVerdict {
+  const text = raw.trim();
+  if (!text) return { kind: "empty" };
+  const letters = text.toLowerCase().replace(/[^a-z]/g, "");
+  if (letters.length < 3) return { kind: "gibberish" };
+  const vowels = (letters.match(/[aeiou]/g) ?? []).length;
+  // English prose runs ~35-45% vowels; mashing skews far below.
+  if (vowels / letters.length < 0.2) return { kind: "gibberish" };
+  return { kind: "ok", text };
+}
+
+const GIBBERISH_NOTE = (occasion: Occasion) =>
+  `That didn't sound like a look — styled for ${OCCASION_META[occasion].label} instead.`;
 
 const TARGET_FORMALITY: Record<Occasion, number> = {
   casual: 1,
@@ -108,6 +137,104 @@ function buildRationale(
   return bits.join(" ");
 }
 
+/* ------------------------- one-tap tweaks --------------------------- */
+/** Shared by the Studio tweak buttons and the prompt fallback path. */
+
+export type TweakKind = "swapTop" | "swapShoes" | "warmer" | "cooler" | "dressUp" | "casual";
+
+function randomOther(pool: Garment[], currentId?: string): Garment | undefined {
+  if (pool.length === 0) return undefined;
+  const alt = pool.filter((g) => g.id !== currentId);
+  const src = alt.length > 0 ? alt : pool;
+  return src[Math.floor(Math.random() * src.length)];
+}
+
+const byWarmthDesc = (a: Garment, b: Garment) => b.warmth - a.warmth;
+const byFormalityDesc = (a: Garment, b: Garment) => b.formality - a.formality;
+
+export function applyTweak(outfit: Outfit, kind: TweakKind, garments: Garment[]): Outfit {
+  const inCat = (c: Garment["category"]) => garments.filter((g) => g.category === c);
+  const next: Outfit = { ...outfit };
+  switch (kind) {
+    case "swapTop": {
+      if (next.dress) {
+        const d = randomOther(inCat("dress"), next.dress.id);
+        if (d) next.dress = d;
+      } else {
+        const t = randomOther(inCat("top"), next.top?.id);
+        if (t) {
+          next.top = t;
+          delete next.dress;
+        }
+      }
+      break;
+    }
+    case "swapShoes": {
+      const s = randomOther(inCat("shoes"), next.shoes?.id);
+      if (s) next.shoes = s;
+      break;
+    }
+    case "warmer": {
+      const outers = inCat("outerwear");
+      if (outers.length > 0) next.outer = [...outers].sort(byWarmthDesc)[0];
+      if (next.top) {
+        const tops = inCat("top");
+        if (tops.length > 0) next.top = [...tops].sort(byWarmthDesc)[0];
+      }
+      if (next.bottom) {
+        const bots = inCat("bottom");
+        if (bots.length > 0) next.bottom = [...bots].sort(byWarmthDesc)[0];
+      }
+      if (next.dress) {
+        const dresses = inCat("dress");
+        if (dresses.length > 0) next.dress = [...dresses].sort(byWarmthDesc)[0];
+      }
+      break;
+    }
+    case "cooler": {
+      delete next.outer;
+      if (next.top) {
+        const tops = inCat("top");
+        if (tops.length > 0) next.top = [...tops].sort((a, b) => a.warmth - b.warmth)[0];
+      }
+      if (next.bottom) {
+        const bots = inCat("bottom");
+        if (bots.length > 0) next.bottom = [...bots].sort((a, b) => a.warmth - b.warmth)[0];
+      }
+      if (next.dress) {
+        const dresses = inCat("dress");
+        if (dresses.length > 0) next.dress = [...dresses].sort((a, b) => a.warmth - b.warmth)[0];
+      }
+      break;
+    }
+    case "dressUp": {
+      (["top", "bottom", "dress", "outer", "shoes"] as const).forEach((slot) => {
+        const cur = next[slot];
+        if (!cur) return;
+        const pool = inCat(cur.category);
+        if (pool.length > 0) next[slot] = [...pool].sort(byFormalityDesc)[0] as never;
+      });
+      if (!next.accessory) {
+        const extras = inCat("accessory");
+        if (extras.length > 0) next.accessory = [...extras].sort(byFormalityDesc)[0];
+      }
+      break;
+    }
+    case "casual": {
+      (["top", "bottom", "dress", "outer", "shoes"] as const).forEach((slot) => {
+        const cur = next[slot];
+        if (!cur) return;
+        const pool = inCat(cur.category);
+        if (pool.length > 0)
+          next[slot] = [...pool].sort((a, b) => a.formality - b.formality)[0] as never;
+      });
+      delete next.accessory;
+      break;
+    }
+  }
+  return next;
+}
+
 /** Local heuristic engine — deterministic-ish, always available. */
 export function composeOutfit(
   garments: Garment[],
@@ -175,7 +302,8 @@ export function composeOutfit(
 async function viaGemini(
   garments: Garment[],
   occasion: Occasion,
-  weather: WeatherNow | null
+  weather: WeatherNow | null,
+  userRequest: string | null
 ): Promise<StyleResult> {
   const listing = garments
     .map(
@@ -186,13 +314,22 @@ async function viaGemini(
   const wx = weather
     ? `Weather: ${weather.feelsC}°C feels-like, ${weather.label}, rain:${weather.isRain}, bucket:${weather.bucket}.`
     : "Weather unknown; assume mild.";
+
+  const requestBlock = userRequest
+    ? `USER REQUEST (primary instruction — it outranks defaults below): "${userRequest}"\n` +
+      `- Honor it with concrete picks: if they name weather, formality, colors or garment types, the outfit must visibly reflect that.\n` +
+      `- Weather conflicts: if the request fights the weather (e.g. shorts in freezing cold), still honor the requested garments BUT add the warmest available outerwear for cold/rain (or drop outerwear for heat), and state the tradeoff plainly in the rationale.\n` +
+      `- Relevance: if the request is nonsensical or unrelated to clothing, style, occasions or weather, IGNORE it, style for the occasion + weather, set usedPrompt:false, and explain why in promptNote. Otherwise set usedPrompt:true and write promptNote as one concrete sentence naming which picks honor the request.\n`
+    : `No user request: style for the occasion + weather. Set usedPrompt:false and promptNote:"".\n`;
+
   const prompt =
     `You are a personal stylist. Pick ONE outfit from this closet for occasion "${occasion}". ${wx}\n` +
+    requestBlock +
     `Closet:\n${listing}\n` +
-    `Respond with JSON only: {"top":id|null,"bottom":id|null,"dress":id|null,"outer":id|null,"shoes":id|null,"accessory":id|null,"rationale":"two sentences max"}`;
+    `Respond with JSON only: {"top":id|null,"bottom":id|null,"dress":id|null,"outer":id|null,"shoes":id|null,"accessory":id|null,"rationale":"two sentences max","usedPrompt":true|false,"promptNote":"one sentence, max 140 chars"}`;
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -216,6 +353,8 @@ async function viaGemini(
     shoes?: string | null;
     accessory?: string | null;
     rationale?: string;
+    usedPrompt?: boolean;
+    promptNote?: string;
   };
   const find = (id?: string | null) => garments.find((g) => g.id === id);
   const outfit: Outfit = {
@@ -227,12 +366,95 @@ async function viaGemini(
     accessory: find(parsed.accessory),
   };
   if (!outfit.top && !outfit.dress) throw new Error("Gemini returned no core piece");
+  const usedPrompt = userRequest ? parsed.usedPrompt === true : false;
   return {
     outfit,
-    rationale: parsed.rationale ?? "Assembled by Gemini.",
+    rationale: parsed.rationale ?? "Styled for the occasion and weather.",
     engine: "gemini",
     score: 0,
     occasion,
+    usedPrompt,
+    promptNote:
+      typeof parsed.promptNote === "string" && parsed.promptNote.trim()
+        ? parsed.promptNote.trim().slice(0, 140)
+        : undefined,
+  };
+}
+
+/**
+ * Offline fallback for a free-text request: keyword-driven tweaks on top of
+ * the heuristic outfit, with honest notes when the text maps to nothing or
+ * fights the weather.
+ */
+export function composeWithPrompt(
+  garments: Garment[],
+  occasion: Occasion,
+  weather: WeatherNow | null,
+  text: string
+): StyleResult {
+  const lower = text.toLowerCase();
+  const base = composeOutfit(garments, occasion, weather);
+  let outfit = base.outfit;
+  const applied: string[] = [];
+  let matched = false;
+
+  if (/warm|winter|cold|coat|chill|freez|heat|layer|sweater|jacket/.test(lower)) {
+    outfit = applyTweak(outfit, "warmer", garments);
+    applied.push("warmer layers");
+    matched = true;
+  } else if (/cool|breez|summer|hot|light|airy|heatwave|shorts|tank/.test(lower)) {
+    outfit = applyTweak(outfit, "cooler", garments);
+    applied.push("lighter pieces");
+    matched = true;
+  }
+  if (/rain|wet|storm|drizzle|shower|umbrella/.test(lower) && !outfit.outer) {
+    const outers = garments.filter((g) => g.category === "outerwear");
+    if (outers.length > 0) {
+      outfit = { ...outfit, outer: [...outers].sort(byWarmthDesc)[0] };
+      applied.push("rain cover");
+      matched = true;
+    }
+  }
+  if (/formal|fancy|elegant|dressy|dressed|smart|sharp|polish|date|wedding/.test(lower)) {
+    outfit = applyTweak(outfit, "dressUp", garments);
+    applied.push("sharper picks");
+    matched = true;
+  } else if (/casual|relax|chill|everyday|laid|comfy|cozy/.test(lower)) {
+    outfit = applyTweak(outfit, "casual", garments);
+    applied.push("laid-back picks");
+    matched = true;
+  }
+
+  // Weather conflict, stated plainly instead of silently obeyed.
+  let conflict: string | undefined;
+  const wantsCool = /shorts|tank|sleeveless|skirt|sandals|dress\b/.test(lower);
+  const wantsWarm = /coat|jacket|sweater|boots|layer|flannel/.test(lower);
+  if (wantsCool && weather && (weather.bucket === "cold" || weather.bucket === "cool")) {
+    const outers = garments.filter((g) => g.category === "outerwear");
+    if (outers.length > 0 && !outfit.outer) {
+      outfit = { ...outfit, outer: [...outers].sort(byWarmthDesc)[0] };
+    }
+    conflict = `Breezy picks at ${weather.feelsC}°C — kept them, added the warmest cover.`;
+  } else if (wantsWarm && weather && (weather.bucket === "hot" || weather.bucket === "warm")) {
+    delete outfit.outer;
+    conflict = `Heavy layers at ${weather.feelsC}°C — kept the look, dropped the outer layer.`;
+  }
+
+  if (!matched && !conflict) {
+    return {
+      ...base,
+      usedPrompt: false,
+      promptNote: `Couldn't map that to anything wearable — styled for ${OCCASION_META[occasion].label} instead.`,
+    };
+  }
+  const note = conflict ?? `Worked in ${applied.join(", ")} for your note.`;
+  // Rebuild the rationale from the final outfit so it names what changed.
+  return {
+    ...base,
+    outfit,
+    rationale: buildRationale(outfit, occasion, weather),
+    usedPrompt: true,
+    promptNote: note,
   };
 }
 
@@ -241,16 +463,32 @@ async function viaGemini(
 export async function generateStyle(
   garments: Garment[],
   occasion: Occasion,
-  weather: WeatherNow | null
+  weather: WeatherNow | null,
+  promptRaw = ""
 ): Promise<StyleResult> {
   // Small latency keeps the staged UI readable and prevents flicker.
   await delay(650 + Math.random() * 550);
+  const verdict = assessPrompt(promptRaw);
+
   if (geminiReady) {
     try {
-      return await viaGemini(garments, occasion, weather);
+      if (verdict.kind === "ok") {
+        return await viaGemini(garments, occasion, weather, verdict.text);
+      }
+      const plain = await viaGemini(garments, occasion, weather, null);
+      if (verdict.kind === "gibberish") {
+        return { ...plain, usedPrompt: false, promptNote: GIBBERISH_NOTE(occasion) };
+      }
+      return plain;
     } catch {
       // Quota hit or bad response — fall through to the heuristic.
     }
+  }
+
+  if (verdict.kind === "ok") return composeWithPrompt(garments, occasion, weather, verdict.text);
+  if (verdict.kind === "gibberish") {
+    const plain = composeOutfit(garments, occasion, weather);
+    return { ...plain, usedPrompt: false, promptNote: GIBBERISH_NOTE(occasion) };
   }
   return composeOutfit(garments, occasion, weather);
 }

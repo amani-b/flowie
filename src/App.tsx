@@ -100,7 +100,7 @@ function Splash() {
         <LogoMark className="h-16 w-16 text-ink" />
       </motion.div>
       <p className="font-display text-[13px] font-extrabold tracking-[0.34em] text-mut">
-        FITFLOW
+        FLOWIE
       </p>
       <div className="h-1 w-28 overflow-hidden rounded-full bg-line">
         <motion.div

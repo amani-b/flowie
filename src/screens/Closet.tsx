@@ -12,10 +12,11 @@ import {
   uid,
 } from "../lib/utils";
 import type { Category, Formality, Garment, Warmth, ColorFamily, AccessoryKind } from "../types";
+import type { PatternKind } from "../lib/patternDetect";
 import GarmentCard from "../components/GarmentCard";
 import Sheet from "../components/Sheet";
 import { GarmentGlyph, LogoMark } from "../components/icons";
-import { tagGarmentPhoto, taggingToGarment, geminiReady, type TaggingResult } from "../services/aiStylistService";
+import { tagGarmentPhoto, taggingToGarment, type TaggingResult } from "../services/aiStylistService";
 
 type Filter = "all" | Category;
 
@@ -105,6 +106,12 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
 
   const validCategories = ["top", "bottom", "dress", "outerwear", "shoes", "accessory"] as Category[];
   const validFamilies = ["neutral", "warm", "cool", "earth", "accent"] as ColorFamily[];
+  const validPatterns: Array<{ id: PatternKind; label: string }> = [
+    { id: "solid", label: "Solid" },
+    { id: "striped", label: "Striped" },
+    { id: "colorblock", label: "Colorblock" },
+    { id: "other", label: "Print" },
+  ];
 
   if (pending.length > 0) {
     return (
@@ -168,6 +175,49 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                       {validFamilies.map((f) => (
                         <option key={f} value={f}>
                           {f.charAt(0).toUpperCase() + f.slice(1)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Detected colors + pattern: confirm or correct before saving */}
+                  <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-bold text-mut">Colors:</span>
+                      {(p.colors ?? []).slice(0, 3).map((hex, i) => (
+                        <button
+                          key={`${hex}-${i}`}
+                          onClick={() => {
+                            // Promote tapped swatch to the primary color,
+                            // keeping the measured shares aligned.
+                            const order = (p.colors ?? []).map((_, j) => j);
+                            const next = [i, ...order.filter((j) => j !== i)];
+                            updatePending(p.tempId, {
+                              colors: next.map((j) => (p.colors ?? [])[j]),
+                              patternMix: p.patternMix
+                                ? next.map((j) => p.patternMix![j])
+                                : undefined,
+                            });
+                          }}
+                          title={i === 0 ? "Main color (tap another to change)" : "Tap to make main"}
+                          aria-label={`Set ${hex} as main color`}
+                          className={cn(
+                            "h-6 w-6 rounded-full border-2 transition active:scale-90",
+                            i === 0 ? "border-acc" : "border-linestrong"
+                          )}
+                          style={{ background: hex }}
+                        />
+                      ))}
+                    </div>
+                    <select
+                      className="field !py-1 !text-[11px] !px-2 w-full sm:w-auto"
+                      value={p.pattern}
+                      onChange={(e) => updatePending(p.tempId, { pattern: e.target.value as PatternKind })}
+                      aria-label="Pattern"
+                    >
+                      {validPatterns.map((pt) => (
+                        <option key={pt.id} value={pt.id}>
+                          {pt.label}
                         </option>
                       ))}
                     </select>
@@ -298,7 +348,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
               transition={{ ease: "easeOut" }}
             />
           </div>
-          <p className="text-[11px] text-mut">Using Gemini 2.5 Flash for smart tagging…</p>
+          <p className="text-[11px] text-mut">Reading colors, pattern and fit…</p>
         </div>
       )}
 
@@ -327,15 +377,6 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
         </button>
       </div>
 
-      {!geminiReady && files.length === 0 && (
-        <div className="rounded-[14px] border border-acc/30 bg-accsoft/50 p-3">
-          <p className="text-[11px] font-medium leading-relaxed text-mut">
-            <span className="font-extrabold text-acc">Note:</span> No Gemini API key configured.
-            Using client-side heuristic tagging (filename-based guesses). Add{" "}
-            <code className="rounded bg-card px-1 py-0.5 text-[10px]">VITE_GEMINI_API_KEY</code> to your .env for AI tagging.
-          </p>
-        </div>
-      )}
     </div>
   );
 }

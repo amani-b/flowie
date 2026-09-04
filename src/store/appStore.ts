@@ -114,7 +114,7 @@ export interface AppStore {
 
   refreshWeather: () => Promise<void>;
   generateToday: (occasion?: Occasion) => Promise<void>;
-  generateForStudio: (occasion: Occasion) => Promise<void>;
+  generateForStudio: (occasion: Occasion, prompt?: string) => Promise<void>;
   /** Replace the studio result in place (quick tweaks / custom prompt). */
   setStudioResult: (result: StyleResult) => void;
   saveLook: (result: StyleResult, name?: string) => Promise<SavedLook>;
@@ -578,13 +578,13 @@ export const useAppStore = create<AppStore>()(
         }
       },
 
-      generateForStudio: async (occasion) => {
+      generateForStudio: async (occasion, prompt = "") => {
         set({
           generation: { status: "working", occasion, result: null, error: null },
         });
         const { garments, weather } = get();
         try {
-          const result = await generateStyle(garments, occasion, weather.data);
+          const result = await generateStyle(garments, occasion, weather.data, prompt);
           set({
             generation: { status: "done", occasion, result, error: null },
           });
