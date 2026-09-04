@@ -9,6 +9,56 @@ import { tempBucket } from "../lib/utils";
 
 const DEFAULT_LOC = { lat: 40.7128, lon: -74.006, name: "New York" };
 
+export interface CityOption {
+  lat: number;
+  lon: number;
+  name: string;
+}
+
+/** Hand-picked presets for the location picker (geolocation first, always). */
+export const CITIES: CityOption[] = [
+  { lat: 40.7128, lon: -74.006, name: "New York" },
+  { lat: 34.0522, lon: -118.2437, name: "Los Angeles" },
+  { lat: 51.5074, lon: -0.1278, name: "London" },
+  { lat: 48.8566, lon: 2.3522, name: "Paris" },
+  { lat: 52.52, lon: 13.405, name: "Berlin" },
+  { lat: 6.5244, lon: 3.3792, name: "Lagos" },
+  { lat: 35.6762, lon: 139.6503, name: "Tokyo" },
+  { lat: -33.8688, lon: 151.2093, name: "Sydney" },
+];
+
+const WEATHER_LOC_KEY = "fitflow-weather-loc";
+
+export function getWeatherLoc(): CityOption | null {
+  try {
+    const raw = localStorage.getItem(WEATHER_LOC_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CityOption>;
+    if (typeof parsed.lat === "number" && typeof parsed.lon === "number" && parsed.name) {
+      return { lat: parsed.lat, lon: parsed.lon, name: parsed.name };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function setWeatherLoc(city: CityOption): void {
+  try {
+    localStorage.setItem(WEATHER_LOC_KEY, JSON.stringify(city));
+  } catch {
+    /* storage full/blocked — geolocation path still works */
+  }
+}
+
+export function clearWeatherLoc(): void {
+  try {
+    localStorage.removeItem(WEATHER_LOC_KEY);
+  } catch {
+    /* noop */
+  }
+}
+
 const RAIN_CODES = new Set([
   51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99,
 ]);
@@ -29,6 +79,9 @@ function describe(code: number): { label: string; icon: WeatherIconKind; isRain:
 }
 
 function getPosition(): Promise<{ lat: number; lon: number; name: string }> {
+  // A manually picked city always wins — instant, no permission dance.
+  const override = getWeatherLoc();
+  if (override) return Promise.resolve(override);
   return new Promise((resolve) => {
     if (!("geolocation" in navigator)) {
       resolve(DEFAULT_LOC);

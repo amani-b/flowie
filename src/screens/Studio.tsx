@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Bookmark, Plus, RefreshCw, Shirt, Sparkles, Wand2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, Bookmark, Briefcase, Coffee, Expand, Flame, Plus, RefreshCw, Send, Shirt, Snowflake, Wand2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { cn, darken, OCCASION_META, VIBE_TO_OCCASION } from "../lib/utils";
-import type { Garment, Occasion, Outfit } from "../types";
-import Avatar from "../components/Avatar";
+import type { Garment, Occasion, Outfit, StyleResult, WeatherNow } from "../types";
+import FitAvatar from "../components/FitAvatar";
 import Sheet from "../components/Sheet";
 import { StudioSkeleton } from "../components/Skeletons";
 import { GarmentGlyph } from "../components/icons";
+import { composeOutfit } from "../services/stylist";
 
 const STAGES = [
   "Reading the sky…",
@@ -19,6 +20,152 @@ function outfitPieces(o: Record<string, Garment | undefined>): Garment[] {
   return ["dress", "top", "bottom", "outer", "shoes", "accessory"]
     .map((k) => o[k])
     .filter((g): g is Garment => Boolean(g));
+}
+
+/* ------------------------- quick tweaks (local) ------------------------ */
+/** One-tap adjustments applied to the current result using the real closet.
+ *  Pure function — no engine calls, no file changes elsewhere. */
+type TweakKind = "swapTop" | "swapShoes" | "warmer" | "cooler" | "dressUp" | "casual";
+
+const TWEAKS: Array<{ kind: TweakKind; label: string; icon: typeof Flame }> = [
+  { kind: "swapTop", label: "Swap top", icon: ArrowLeftRight },
+  { kind: "swapShoes", label: "Swap shoes", icon: ArrowLeftRight },
+  { kind: "warmer", label: "Warmer", icon: Flame },
+  { kind: "cooler", label: "Cooler", icon: Snowflake },
+  { kind: "dressUp", label: "Dress up", icon: Briefcase },
+  { kind: "casual", label: "Casual", icon: Coffee },
+];
+
+function randomOther(pool: Garment[], currentId?: string): Garment | undefined {
+  if (pool.length === 0) return undefined;
+  const alt = pool.filter((g) => g.id !== currentId);
+  const src = alt.length > 0 ? alt : pool;
+  return src[Math.floor(Math.random() * src.length)];
+}
+
+const byWarmthDesc = (a: Garment, b: Garment) => b.warmth - a.warmth;
+const byFormalityDesc = (a: Garment, b: Garment) => b.formality - a.formality;
+
+function applyTweak(outfit: Outfit, kind: TweakKind, garments: Garment[]): Outfit {
+  const inCat = (c: Garment["category"]) => garments.filter((g) => g.category === c);
+  const next: Outfit = { ...outfit };
+  switch (kind) {
+    case "swapTop": {
+      if (next.dress) {
+        const d = randomOther(inCat("dress"), next.dress.id);
+        if (d) next.dress = d;
+      } else {
+        const t = randomOther(inCat("top"), next.top?.id);
+        if (t) {
+          next.top = t;
+          delete next.dress;
+        }
+      }
+      break;
+    }
+    case "swapShoes": {
+      const s = randomOther(inCat("shoes"), next.shoes?.id);
+      if (s) next.shoes = s;
+      break;
+    }
+    case "warmer": {
+      const outers = inCat("outerwear");
+      if (outers.length > 0) next.outer = [...outers].sort(byWarmthDesc)[0];
+      if (next.top) {
+        const tops = inCat("top");
+        if (tops.length > 0) next.top = [...tops].sort(byWarmthDesc)[0];
+      }
+      if (next.bottom) {
+        const bots = inCat("bottom");
+        if (bots.length > 0) next.bottom = [...bots].sort(byWarmthDesc)[0];
+      }
+      if (next.dress) {
+        const dresses = inCat("dress");
+        if (dresses.length > 0) next.dress = [...dresses].sort(byWarmthDesc)[0];
+      }
+      break;
+    }
+    case "cooler": {
+      delete next.outer;
+      if (next.top) {
+        const tops = inCat("top");
+        if (tops.length > 0) next.top = [...tops].sort((a, b) => a.warmth - b.warmth)[0];
+      }
+      if (next.bottom) {
+        const bots = inCat("bottom");
+        if (bots.length > 0) next.bottom = [...bots].sort((a, b) => a.warmth - b.warmth)[0];
+      }
+      if (next.dress) {
+        const dresses = inCat("dress");
+        if (dresses.length > 0) next.dress = [...dresses].sort((a, b) => a.warmth - b.warmth)[0];
+      }
+      break;
+    }
+    case "dressUp": {
+      (["top", "bottom", "dress", "outer", "shoes"] as const).forEach((slot) => {
+        const cur = next[slot];
+        if (!cur) return;
+        const pool = inCat(cur.category);
+        if (pool.length > 0) next[slot] = [...pool].sort(byFormalityDesc)[0] as never;
+      });
+      if (!next.accessory) {
+        const extras = inCat("accessory");
+        if (extras.length > 0) next.accessory = [...extras].sort(byFormalityDesc)[0];
+      }
+      break;
+    }
+    case "casual": {
+      (["top", "bottom", "dress", "outer", "shoes"] as const).forEach((slot) => {
+        const cur = next[slot];
+        if (!cur) return;
+        const pool = inCat(cur.category);
+        if (pool.length > 0)
+          next[slot] = [...pool].sort((a, b) => a.formality - b.formality)[0] as never;
+      });
+      delete next.accessory;
+      break;
+    }
+  }
+  return next;
+}
+
+/** Guess an occasion + adjustments from free-form text. */
+function styleFromPrompt(
+  text: string,
+  fallback: Occasion,
+  garments: Garment[],
+  weather: WeatherNow | null
+): StyleResult {
+  const lower = text.toLowerCase();
+  const occasion: Occasion = /work|office|meeting|interview|business|conference/.test(lower)
+    ? "work"
+    : /date|dinner|romant|anniversary|drinks/.test(lower)
+      ? "date"
+      : /gym|run|workout|sport|train|yoga|jog/.test(lower)
+        ? "gym"
+        : /party|club|wedding|event|formal|fancy|elegant|ceremony/.test(lower)
+          ? "party"
+          : fallback;
+  const base = composeOutfit(garments, occasion, weather);
+  let outfit = base.outfit;
+  if (/warm|winter|cold|coat|chill|freez|heat|layer/.test(lower))
+    outfit = applyTweak(outfit, "warmer", garments);
+  else if (/cool|breez|summer|hot|light|airy|heatwave/.test(lower))
+    outfit = applyTweak(outfit, "cooler", garments);
+  if (/rain|wet|storm|drizzle|shower|umbrella/.test(lower) && !outfit.outer) {
+    const outers = garments.filter((g) => g.category === "outerwear");
+    if (outers.length > 0) outfit = { ...outfit, outer: [...outers].sort(byWarmthDesc)[0] };
+  }
+  if (/formal|fancy|elegant|dressy|dressed|smart|sharp|polish/.test(lower))
+    outfit = applyTweak(outfit, "dressUp", garments);
+  else if (/casual|relax|chill|everyday|laid|comfy|cozy/.test(lower))
+    outfit = applyTweak(outfit, "casual", garments);
+  return {
+    ...base,
+    outfit,
+    occasion,
+    rationale: `For \u201C${text.trim()}\u201D: ${base.rationale}`,
+  };
 }
 
 type SlotKey = "top" | "bottom" | "dress" | "outer" | "shoes" | "accessory";
@@ -36,16 +183,21 @@ export default function Studio() {
   const garments = useAppStore((s) => s.garments);
   const generation = useAppStore((s) => s.generation);
   const generateForStudio = useAppStore((s) => s.generateForStudio);
+  const setStudioResult = useAppStore((s) => s.setStudioResult);
   const saveLook = useAppStore((s) => s.saveLook);
   const stylePrefs = useAppStore((s) => s.stylePrefs);
   const restoreSamples = useAppStore((s) => s.restoreSamples);
   const setTab = useAppStore((s) => s.setTab);
+  const weather = useAppStore((s) => s.weather);
+  const notify = useAppStore((s) => s.notify);
 
   const [mode, setMode] = useState<"ai" | "manual">("ai");
   const [occasion, setOccasion] = useState<Occasion>(() =>
     stylePrefs ? VIBE_TO_OCCASION[stylePrefs.vibe] : "casual"
   );
   const [stage, setStage] = useState(0);
+  const [prompt, setPrompt] = useState("");
+  const [zoom, setZoom] = useState<Outfit | null>(null);
 
   // Manual mode state
   const [manualOutfit, setManualOutfit] = useState<Outfit>({});
@@ -68,6 +220,26 @@ export default function Studio() {
 
   const result = mode === "ai" ? generation.result : { outfit: manualOutfit, rationale: "Styled by you", engine: "manual" as const, score: 0, occasion };
   const pieces = result ? outfitPieces(result.outfit as Record<string, Garment | undefined>) : [];
+  const zoomPieces = zoom ? outfitPieces(zoom as Record<string, Garment | undefined>) : [];
+
+  const runTweak = (kind: TweakKind) => {
+    if (!result) return;
+    const next = applyTweak(result.outfit, kind, garments);
+    setStudioResult({ ...result, outfit: next });
+  };
+
+  const runPrompt = () => {
+    const text = prompt.trim();
+    if (!text) return;
+    try {
+      const styled = styleFromPrompt(text, occasion, garments, weather.data);
+      setOccasion(styled.occasion);
+      setStudioResult(styled);
+      setPrompt("");
+    } catch (e) {
+      notify(e instanceof Error ? e.message : "Could not style that prompt", "err");
+    }
+  };
 
   const openSlotPicker = (slot: SlotKey) => {
     setActiveSlot(slot);
@@ -208,6 +380,30 @@ export default function Studio() {
           <p className="mt-1 px-1 text-[11px] font-bold text-mut">
             {OCCASION_META[occasion].blurb}
           </p>
+          {/* free-form prompt: "rainy evening jacket", "dressy but warm"… */}
+          <form
+            className="mt-2 flex gap-1.5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              runPrompt();
+            }}
+          >
+            <input
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="Describe it — “warm but dressy”…"
+              aria-label="Describe the look you want"
+              className="min-w-0 flex-1 rounded-full border border-line bg-card px-4 py-2 text-[12.5px] font-semibold text-ink placeholder:text-mut/70 focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={!prompt.trim()}
+              aria-label="Style from description"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-bg transition active:scale-90 disabled:opacity-40"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </form>
         </>
       )}
 
@@ -263,10 +459,19 @@ export default function Studio() {
               })}
             </div>
 
-            {/* Avatar preview */}
-            <div className="mx-auto mt-6 w-[190px]">
-              <Avatar outfit={manualOutfit} className="w-full" />
-            </div>
+            {/* Avatar preview — tap for full-screen */}
+            <button
+              onClick={() => pieces.length > 0 && setZoom({ ...manualOutfit })}
+              aria-label="Preview look full-screen"
+              className="group relative mx-auto mt-6 block w-[190px]"
+            >
+              <FitAvatar outfit={manualOutfit} className="w-full" />
+              {pieces.length > 0 && (
+                <span className="absolute bottom-1 right-1 flex h-7 w-7 items-center justify-center rounded-full border border-line bg-card/90 text-mut transition group-active:scale-90">
+                  <Expand className="h-3.5 w-3.5" />
+                </span>
+              )}
+            </button>
 
             {/* Save button */}
             <div className="mt-4 flex justify-center gap-2">
@@ -326,13 +531,20 @@ export default function Studio() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, ease: "easeOut" }}
             >
-              <div className="mx-auto w-[190px]">
-                <Avatar
+              <button
+                onClick={() => setZoom(result.outfit)}
+                aria-label="Preview look full-screen"
+                className="group relative mx-auto block w-[190px]"
+              >
+                <FitAvatar
                   outfit={result.outfit}
                   animateKey={pieces.map((p) => p.id).join(".")}
                   className="w-full"
                 />
-              </div>
+                <span className="absolute bottom-1 right-1 flex h-7 w-7 items-center justify-center rounded-full border border-line bg-card/90 text-mut transition group-active:scale-90">
+                  <Expand className="h-3.5 w-3.5" />
+                </span>
+              </button>
               <p className="mt-3 text-[13.5px] font-semibold leading-relaxed">
                 {result.rationale}
               </p>
@@ -364,10 +576,78 @@ export default function Studio() {
                   <RefreshCw className="h-3.5 w-3.5" /> Regenerate
                 </button>
               </div>
+              {/* one-tap tweaks */}
+              <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+                {TWEAKS.map(({ kind, label, icon: Icon }) => (
+                  <button
+                    key={kind}
+                    onClick={() => runTweak(kind)}
+                    className="flex items-center gap-1 rounded-full border border-line px-2.5 py-1.5 text-[11px] font-extrabold text-mut transition hover:text-ink active:scale-95"
+                  >
+                    <Icon className="h-3 w-3" /> {label}
+                  </button>
+                ))}
+              </div>
             </motion.div>
           </AnimatePresence>
         ) : null}
       </motion.section>
+
+      {/* Full-screen look preview */}
+      <AnimatePresence>
+        {zoom && (
+          <div className="fixed inset-0 z-[60]">
+            <motion.button
+              aria-label="Close preview"
+              className="absolute inset-0 h-full w-full bg-black/60 backdrop-blur-[3px]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setZoom(null)}
+            />
+            <motion.div
+              className="absolute inset-x-0 bottom-0 top-10 mx-auto flex w-full max-w-md flex-col items-center overflow-y-auto px-6 pb-[calc(env(safe-area-inset-bottom)+28px)] pt-4"
+              style={{
+                background: "color-mix(in srgb, var(--surface-solid) 97%, transparent)",
+                borderTop: "1px solid var(--line)",
+                borderRadius: "26px 26px 0 0",
+              }}
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+            >
+              <div className="flex w-full items-center justify-between">
+                <span className="label-micro">Look preview</span>
+                <button
+                  onClick={() => setZoom(null)}
+                  className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-mut transition active:scale-90"
+                  aria-label="Close preview"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mt-2 w-[min(72vw,300px)]">
+                <FitAvatar outfit={zoom} className="w-full" />
+              </div>
+              <div className="mt-3 flex max-w-full flex-wrap justify-center gap-1.5">
+                {zoomPieces.map((g) => (
+                  <span
+                    key={g.id}
+                    className="flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-[10.5px] font-extrabold"
+                  >
+                    <span
+                      className="h-2.5 w-2.5 rounded-full border border-linestrong"
+                      style={{ background: g.color }}
+                    />
+                    {g.name}
+                  </span>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Garment picker sheet for manual mode */}
       <Sheet
