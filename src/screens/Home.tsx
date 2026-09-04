@@ -1,8 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
   ArrowRight,
+  Check,
+  ChevronDown,
   Cloud,
   CloudFog,
   CloudLightning,
@@ -10,6 +12,7 @@ import {
   CloudSnow,
   CloudSun,
   Droplets,
+  LocateFixed,
   MapPin,
   RefreshCw,
   Sparkles,
@@ -22,9 +25,11 @@ import {
 import { useAppStore } from "../store/appStore";
 import { BUCKET_META, cn, firstName, formatTemp, greeting, timeAgo, todayLabel } from "../lib/utils";
 import type { Garment, WeatherIconKind } from "../types";
-import Avatar from "../components/Avatar";
+import FitAvatar from "../components/FitAvatar";
+import Sheet from "../components/Sheet";
 import { WeatherSkeleton } from "../components/Skeletons";
 import { geminiReady } from "../services/stylist";
+import { CITIES, clearWeatherLoc, getWeatherLoc, setWeatherLoc, type CityOption } from "../services/weather";
 
 const WX_ICON: Record<WeatherIconKind, LucideIcon> = {
   sun: Sun,
@@ -61,6 +66,22 @@ export default function Home() {
   const restoreSamples = useAppStore((s) => s.restoreSamples);
   const setTab = useAppStore((s) => s.setTab);
   const user = useAppStore((s) => s.user);
+  const [locOpen, setLocOpen] = useState(false);
+  const [locName, setLocName] = useState<string | null>(() => getWeatherLoc()?.name ?? null);
+
+  const pickCity = (city: CityOption) => {
+    setWeatherLoc(city);
+    setLocName(city.name);
+    setLocOpen(false);
+    void refreshWeather();
+  };
+
+  const useMyLocation = () => {
+    clearWeatherLoc();
+    setLocName(null);
+    setLocOpen(false);
+    void refreshWeather();
+  };
 
   useEffect(() => {
     if (weather.status === "idle") void refreshWeather();
@@ -136,10 +157,15 @@ export default function Home() {
           ) : wx ? (
             <>
               <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-[11px] font-extrabold text-mut">
+                <button
+                  onClick={() => setLocOpen(true)}
+                  aria-label="Change weather location"
+                  className="flex items-center gap-1.5 rounded-full text-[11px] font-extrabold text-mut transition active:scale-95"
+                >
                   <MapPin className="h-3.5 w-3.5" />
-                  {wx.location}
-                </span>
+                  {locName ?? wx.location}
+                  <ChevronDown className="h-3 w-3 opacity-70" />
+                </button>
                 <div className="flex items-center gap-1.5">
                   {wx.source === "live" ? (
                     <span className="flex items-center gap-1.5 rounded-full bg-accsoft px-2.5 py-1 text-[9.5px] font-extrabold tracking-[0.14em] text-acc">
@@ -223,7 +249,7 @@ export default function Home() {
         {garments.length === 0 ? (
           <div className="py-2 text-center">
             <div className="mx-auto w-[104px] opacity-70">
-              <Avatar outfit={{}} className="w-full" />
+              <FitAvatar outfit={{}} className="w-full" />
             </div>
             <p className="mt-1 text-[15px] font-extrabold">The rail is empty</p>
             <p className="mx-auto mt-1 max-w-[255px] text-[12.5px] font-medium leading-relaxed text-mut">
@@ -271,7 +297,7 @@ export default function Home() {
               </div>
             </div>
             <div className="w-[92px] shrink-0 opacity-50 grayscale">
-              <Avatar outfit={{}} className="w-full" />
+              <FitAvatar outfit={{}} className="w-full" />
             </div>
           </div>
         ) : (
@@ -309,7 +335,7 @@ export default function Home() {
                 </button>
               </div>
             </div>
-            <Avatar
+            <FitAvatar
               outfit={today.outfit}
               animateKey={todayPieces.map((p) => p.id).join(".")}
               className="w-[122px] shrink-0 self-center"
@@ -364,7 +390,7 @@ export default function Home() {
                 onClick={() => setTab("looks")}
                 className="card w-[118px] shrink-0 rounded-[18px] p-2 text-left transition active:scale-95"
               >
-                <Avatar outfit={look.outfit} className="w-full" />
+                <FitAvatar outfit={look.outfit} className="w-full" />
                 <p className="mt-1 truncate px-0.5 text-[11px] font-extrabold">{look.name}</p>
                 <p className="px-0.5 text-[9.5px] font-bold text-mut">{timeAgo(look.createdAt)}</p>
               </button>
@@ -372,6 +398,41 @@ export default function Home() {
           </div>
         </motion.section>
       )}
+
+      {/* weather location picker */}
+      <Sheet open={locOpen} onClose={() => setLocOpen(false)} title="Weather location">
+        <div className="mt-1 space-y-1.5">
+          <button
+            onClick={useMyLocation}
+            className={cn(
+              "flex w-full items-center gap-2.5 rounded-[14px] border px-3.5 py-2.5 text-left text-[13px] font-extrabold transition active:scale-[0.98]",
+              !locName ? "border-acc bg-accsoft" : "border-line"
+            )}
+          >
+            <LocateFixed className="h-4 w-4 shrink-0 text-acc" />
+            <span className="flex-1">Use my location</span>
+            {!locName && <Check className="h-4 w-4 text-acc" strokeWidth={3} />}
+          </button>
+          {CITIES.map((city) => (
+            <button
+              key={city.name}
+              onClick={() => pickCity(city)}
+              className={cn(
+                "flex w-full items-center gap-2.5 rounded-[14px] border px-3.5 py-2.5 text-left text-[13px] font-extrabold transition active:scale-[0.98]",
+                locName === city.name ? "border-acc bg-accsoft" : "border-line"
+              )}
+            >
+              <MapPin className="h-4 w-4 shrink-0 text-mut" />
+              <span className="flex-1">{city.name}</span>
+              {locName === city.name && <Check className="h-4 w-4 text-acc" strokeWidth={3} />}
+            </button>
+          ))}
+          <p className="px-1 pt-1 text-[11px] font-semibold leading-relaxed text-mut">
+            Your area uses the phone's location when granted — otherwise the
+            default city. Picks are remembered on this device.
+          </p>
+        </div>
+      </Sheet>
     </div>
   );
 }
