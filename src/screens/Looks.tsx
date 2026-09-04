@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Cpu, Search, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Search, Trash2, Wand2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { cn, OCCASION_META, timeAgo } from "../lib/utils";
 import type { Garment, SavedLook } from "../types";
@@ -52,20 +52,12 @@ function LookSheet({ look, onClose }: { look: SavedLook | null; onClose: () => v
                 {OCCASION_META[look.occasion].label.toUpperCase()}
               </span>
               <span className="flex items-center gap-1 text-[10px] font-extrabold tracking-[0.12em] text-mut">
-                {look.engine === "gemini" ? (
+                {look.engine === "manual" && (
                   <>
-                    <Sparkles className="h-3 w-3 text-acc" /> GEMINI
-                  </>
-                ) : look.engine === "manual" ? (
-                  <>
-                    <Wand2 className="h-3 w-3 text-rose" /> MANUAL
-                  </>
-                ) : (
-                  <>
-                    <Cpu className="h-3 w-3 text-amber" /> HEURISTIC
+                    <Wand2 className="h-3 w-3 text-rose" /> STYLED BY YOU ·
                   </>
                 )}
-                · {timeAgo(look.createdAt)}
+                {timeAgo(look.createdAt)}
               </span>
             </div>
             <Avatar

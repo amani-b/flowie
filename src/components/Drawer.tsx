@@ -1,12 +1,8 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion, type PanInfo } from "framer-motion";
 import {
-  Check,
-  Copy,
   Cpu,
   Download,
-  Globe,
-  KeyRound,
   LogOut,
   Moon,
   RotateCcw,
@@ -18,7 +14,6 @@ import {
 } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { geminiReady } from "../services/stylist";
-import { supabaseUrl } from "../services/supabaseClient";
 import { cn } from "../lib/utils";
 import { BODY_SHAPES, SKIN_TONES } from "./FitAvatar";
 import type { BodyShape } from "../types";
@@ -55,62 +50,6 @@ function Seg<T extends string>({
     </div>
   );
 }
-
-/** Copy-to-clipboard row with inline success feedback. */
-function CopyRow({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-    } catch {
-      // Clipboard blocked (sandboxed iframe) — fall back to execCommand.
-      const ta = document.createElement("textarea");
-      ta.value = value;
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand("copy");
-      } catch {
-        /* nothing left to try */
-      }
-      document.body.removeChild(ta);
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-  return (
-    <div>
-      <p className="mb-1 text-[10.5px] font-extrabold text-mut">{label}</p>
-      <button
-        onClick={() => void copy()}
-        className="group flex w-full items-center gap-2 rounded-[12px] border border-line bg-bgdeep px-3 py-2 text-left transition active:scale-[0.98]"
-      >
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] font-bold text-ink">
-          {value}
-        </span>
-        <span
-          className={cn(
-            "flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors",
-            copied ? "bg-accsoft text-acc" : "bg-line text-mut group-hover:text-ink"
-          )}
-        >
-          {copied ? (
-            <Check className="h-3 w-3" strokeWidth={3.4} />
-          ) : (
-            <Copy className="h-3 w-3" />
-          )}
-        </span>
-      </button>
-    </div>
-  );
-}
-
-const OAUTH_STEPS = [
-  "Google Cloud Console → OAuth client → paste the callback URL below into Authorized redirect URIs",
-  "Consent screen: External + add your email as a test user (fixes the 403)",
-  "Supabase → Authentication → Providers → Google → paste Client ID + Secret",
-  "Supabase → URL Configuration → Site URL & Redirect URLs = your origin below",
-];
 
 export default function Drawer() {
   const open = useAppStore((s) => s.drawerOpen);
@@ -158,8 +97,6 @@ export default function Drawer() {
   const handleDragEnd = (_: unknown, info: PanInfo) => {
     if (info.offset.x > 90 || info.velocity.x > 450) setOpen(false);
   };
-
-  const callbackUrl = supabaseUrl ? `${supabaseUrl}/auth/v1/callback` : "";
 
   const handleInstall = async () => {
     if (!installPrompt) return;
@@ -241,7 +178,7 @@ export default function Drawer() {
                         : "bg-line text-mut"
                   )}
                 >
-                  {user?.isDemo ? "DEMO" : mode === "live" ? "CLOUD" : "LOCAL"}
+                  {user?.isDemo ? "Demo" : mode === "live" ? "Synced" : "Offline"}
                 </span>
               </div>
               <button
@@ -321,7 +258,7 @@ export default function Drawer() {
                       )}
                     />
                     <span className="text-[13px] font-extrabold">
-                      {geminiReady ? "Gemini 2.5 Flash" : "On-device heuristic"}
+                      {geminiReady ? "Smart styling" : "On-device styling"}
                     </span>
                     {geminiReady ? (
                       <Sparkles className="ml-auto h-4 w-4 text-acc" />
@@ -331,8 +268,8 @@ export default function Drawer() {
                   </div>
                   <p className="mt-2 text-[11.5px] font-medium leading-relaxed text-mut">
                     {geminiReady
-                      ? "Connected via Google AI Studio. If the free-tier quota is hit, FitFlow falls back to the local engine automatically."
-                      : "No Gemini key detected — outfit logic runs fully on-device. Set VITE_GEMINI_API_KEY to enable Gemini 2.5 Flash (free tier ≈ 1,000 req/day)."}
+                      ? "Picks are tuned online when available, with an on-device fallback so styling always works."
+                      : "Outfit logic runs on this device, no connection needed."}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 rounded-[14px] border border-line px-3.5 py-2.5">
@@ -341,50 +278,14 @@ export default function Drawer() {
                     Weather:{" "}
                     <span className="text-ink">
                       {weather.data?.source === "live"
-                        ? "Live · Open-Meteo"
+                        ? "Live"
                         : weather.status === "loading"
-                          ? "Fetching…"
-                          : "Simulated fallback"}
+                          ? "Updating…"
+                          : "Offline estimate"}
                     </span>
                   </span>
                 </div>
               </section>
-
-              {/* OAuth wiring checklist — only meaningful with Supabase keys */}
-              {mode === "live" && (
-                <section className="space-y-2.5">
-                  <p className="label-micro flex items-center gap-1.5">
-                    <KeyRound className="h-3 w-3" /> Google OAuth wiring
-                  </p>
-                  <div className="card space-y-3 rounded-[20px] p-4">
-                    <ol className="space-y-2">
-                      {OAUTH_STEPS.map((step, i) => (
-                        <li key={step} className="flex gap-2.5">
-                          <span className="mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-accsoft text-[9.5px] font-extrabold text-acc">
-                            {i + 1}
-                          </span>
-                          <span className="text-[11.5px] font-semibold leading-snug text-mut">
-                            {step}
-                          </span>
-                        </li>
-                      ))}
-                    </ol>
-                    <CopyRow
-                      label="Callback URL → Google client's redirect URIs"
-                      value={callbackUrl}
-                    />
-                    <CopyRow
-                      label="Your origin → Supabase Site URL + Redirect URLs"
-                      value={typeof window !== "undefined" ? window.location.origin : ""}
-                    />
-                    <p className="flex gap-1.5 text-[10.5px] font-semibold leading-relaxed text-mut">
-                      <Globe className="mt-0.5 h-3 w-3 shrink-0" />
-                      Preview domains rotate — also allow https://*.preview.qwenlm.io/**
-                      in Redirect URLs so a fresh sandbox session keeps login working.
-                    </p>
-                  </div>
-                </section>
-              )}
 
               <section className="space-y-2.5">
                 <p className="label-micro">Data</p>
@@ -426,9 +327,8 @@ export default function Drawer() {
                   </button>
                 </div>
                 <p className="px-1 text-[10px] font-bold leading-relaxed text-mut">
-                  FitFlow v0.2 · Phase 1 ·{" "}
-                  {mode === "live" ? "Supabase cloud sync" : "on-device mock mode"}
-                  {user?.isDemo ? " · demo account" : ""}
+                  Flowie v0.2
+                  {user?.isDemo ? " · Demo" : mode === "live" ? " · Synced" : " · On this device"}
                 </p>
               </section>
             </div>

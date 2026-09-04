@@ -351,7 +351,7 @@ export default function Onboarding() {
         >
           {step === STEP_COUNT - 1 ? (
             <>
-              Enter FitFlow <Check className="h-5 w-5" strokeWidth={2.8} />
+              Enter Flowie <Check className="h-5 w-5" strokeWidth={2.8} />
             </>
           ) : (
             <>

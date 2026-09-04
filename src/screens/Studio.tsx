@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, ArrowLeftRight, Bookmark, Briefcase, Coffee, Expand, Flame, Plus, RefreshCw, Send, Shirt, Snowflake, Wand2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, Bookmark, Briefcase, Check, Coffee, Expand, Flame, Info, Plus, RefreshCw, Send, Shirt, Snowflake, Wand2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { cn, darken, OCCASION_META, VIBE_TO_OCCASION } from "../lib/utils";
-import type { Garment, Occasion, Outfit, StyleResult, WeatherNow } from "../types";
+import type { Garment, Occasion, Outfit } from "../types";
 import FitAvatar from "../components/FitAvatar";
 import Sheet from "../components/Sheet";
 import { StudioSkeleton } from "../components/Skeletons";
 import { GarmentGlyph } from "../components/icons";
-import { composeOutfit } from "../services/stylist";
+import { applyTweak, type TweakKind } from "../services/stylist";
 
 const STAGES = [
   "Reading the sky…",
@@ -22,11 +22,9 @@ function outfitPieces(o: Record<string, Garment | undefined>): Garment[] {
     .filter((g): g is Garment => Boolean(g));
 }
 
-/* ------------------------- quick tweaks (local) ------------------------ */
-/** One-tap adjustments applied to the current result using the real closet.
- *  Pure function — no engine calls, no file changes elsewhere. */
-type TweakKind = "swapTop" | "swapShoes" | "warmer" | "cooler" | "dressUp" | "casual";
-
+/* ------------------------- quick tweaks (UI labels) ------------------------ */
+/** The tweak engine itself lives in services/stylist (shared with the
+ *  free-text fallback path); this is just button labels. */
 const TWEAKS: Array<{ kind: TweakKind; label: string; icon: typeof Flame }> = [
   { kind: "swapTop", label: "Swap top", icon: ArrowLeftRight },
   { kind: "swapShoes", label: "Swap shoes", icon: ArrowLeftRight },
@@ -35,138 +33,6 @@ const TWEAKS: Array<{ kind: TweakKind; label: string; icon: typeof Flame }> = [
   { kind: "dressUp", label: "Dress up", icon: Briefcase },
   { kind: "casual", label: "Casual", icon: Coffee },
 ];
-
-function randomOther(pool: Garment[], currentId?: string): Garment | undefined {
-  if (pool.length === 0) return undefined;
-  const alt = pool.filter((g) => g.id !== currentId);
-  const src = alt.length > 0 ? alt : pool;
-  return src[Math.floor(Math.random() * src.length)];
-}
-
-const byWarmthDesc = (a: Garment, b: Garment) => b.warmth - a.warmth;
-const byFormalityDesc = (a: Garment, b: Garment) => b.formality - a.formality;
-
-function applyTweak(outfit: Outfit, kind: TweakKind, garments: Garment[]): Outfit {
-  const inCat = (c: Garment["category"]) => garments.filter((g) => g.category === c);
-  const next: Outfit = { ...outfit };
-  switch (kind) {
-    case "swapTop": {
-      if (next.dress) {
-        const d = randomOther(inCat("dress"), next.dress.id);
-        if (d) next.dress = d;
-      } else {
-        const t = randomOther(inCat("top"), next.top?.id);
-        if (t) {
-          next.top = t;
-          delete next.dress;
-        }
-      }
-      break;
-    }
-    case "swapShoes": {
-      const s = randomOther(inCat("shoes"), next.shoes?.id);
-      if (s) next.shoes = s;
-      break;
-    }
-    case "warmer": {
-      const outers = inCat("outerwear");
-      if (outers.length > 0) next.outer = [...outers].sort(byWarmthDesc)[0];
-      if (next.top) {
-        const tops = inCat("top");
-        if (tops.length > 0) next.top = [...tops].sort(byWarmthDesc)[0];
-      }
-      if (next.bottom) {
-        const bots = inCat("bottom");
-        if (bots.length > 0) next.bottom = [...bots].sort(byWarmthDesc)[0];
-      }
-      if (next.dress) {
-        const dresses = inCat("dress");
-        if (dresses.length > 0) next.dress = [...dresses].sort(byWarmthDesc)[0];
-      }
-      break;
-    }
-    case "cooler": {
-      delete next.outer;
-      if (next.top) {
-        const tops = inCat("top");
-        if (tops.length > 0) next.top = [...tops].sort((a, b) => a.warmth - b.warmth)[0];
-      }
-      if (next.bottom) {
-        const bots = inCat("bottom");
-        if (bots.length > 0) next.bottom = [...bots].sort((a, b) => a.warmth - b.warmth)[0];
-      }
-      if (next.dress) {
-        const dresses = inCat("dress");
-        if (dresses.length > 0) next.dress = [...dresses].sort((a, b) => a.warmth - b.warmth)[0];
-      }
-      break;
-    }
-    case "dressUp": {
-      (["top", "bottom", "dress", "outer", "shoes"] as const).forEach((slot) => {
-        const cur = next[slot];
-        if (!cur) return;
-        const pool = inCat(cur.category);
-        if (pool.length > 0) next[slot] = [...pool].sort(byFormalityDesc)[0] as never;
-      });
-      if (!next.accessory) {
-        const extras = inCat("accessory");
-        if (extras.length > 0) next.accessory = [...extras].sort(byFormalityDesc)[0];
-      }
-      break;
-    }
-    case "casual": {
-      (["top", "bottom", "dress", "outer", "shoes"] as const).forEach((slot) => {
-        const cur = next[slot];
-        if (!cur) return;
-        const pool = inCat(cur.category);
-        if (pool.length > 0)
-          next[slot] = [...pool].sort((a, b) => a.formality - b.formality)[0] as never;
-      });
-      delete next.accessory;
-      break;
-    }
-  }
-  return next;
-}
-
-/** Guess an occasion + adjustments from free-form text. */
-function styleFromPrompt(
-  text: string,
-  fallback: Occasion,
-  garments: Garment[],
-  weather: WeatherNow | null
-): StyleResult {
-  const lower = text.toLowerCase();
-  const occasion: Occasion = /work|office|meeting|interview|business|conference/.test(lower)
-    ? "work"
-    : /date|dinner|romant|anniversary|drinks/.test(lower)
-      ? "date"
-      : /gym|run|workout|sport|train|yoga|jog/.test(lower)
-        ? "gym"
-        : /party|club|wedding|event|formal|fancy|elegant|ceremony/.test(lower)
-          ? "party"
-          : fallback;
-  const base = composeOutfit(garments, occasion, weather);
-  let outfit = base.outfit;
-  if (/warm|winter|cold|coat|chill|freez|heat|layer/.test(lower))
-    outfit = applyTweak(outfit, "warmer", garments);
-  else if (/cool|breez|summer|hot|light|airy|heatwave/.test(lower))
-    outfit = applyTweak(outfit, "cooler", garments);
-  if (/rain|wet|storm|drizzle|shower|umbrella/.test(lower) && !outfit.outer) {
-    const outers = garments.filter((g) => g.category === "outerwear");
-    if (outers.length > 0) outfit = { ...outfit, outer: [...outers].sort(byWarmthDesc)[0] };
-  }
-  if (/formal|fancy|elegant|dressy|dressed|smart|sharp|polish/.test(lower))
-    outfit = applyTweak(outfit, "dressUp", garments);
-  else if (/casual|relax|chill|everyday|laid|comfy|cozy/.test(lower))
-    outfit = applyTweak(outfit, "casual", garments);
-  return {
-    ...base,
-    outfit,
-    occasion,
-    rationale: `For \u201C${text.trim()}\u201D: ${base.rationale}`,
-  };
-}
 
 type SlotKey = "top" | "bottom" | "dress" | "outer" | "shoes" | "accessory";
 
@@ -188,8 +54,6 @@ export default function Studio() {
   const stylePrefs = useAppStore((s) => s.stylePrefs);
   const restoreSamples = useAppStore((s) => s.restoreSamples);
   const setTab = useAppStore((s) => s.setTab);
-  const weather = useAppStore((s) => s.weather);
-  const notify = useAppStore((s) => s.notify);
 
   const [mode, setMode] = useState<"ai" | "manual">("ai");
   const [occasion, setOccasion] = useState<Occasion>(() =>
@@ -230,15 +94,12 @@ export default function Studio() {
 
   const runPrompt = () => {
     const text = prompt.trim();
-    if (!text) return;
-    try {
-      const styled = styleFromPrompt(text, occasion, garments, weather.data);
-      setOccasion(styled.occasion);
-      setStudioResult(styled);
-      setPrompt("");
-    } catch (e) {
-      notify(e instanceof Error ? e.message : "Could not style that prompt", "err");
-    }
+    if (!text || generation.status === "working") return;
+    // The text goes to the styling engine as a first-class instruction
+    // (model call when online, keyword path when offline). The result
+    // carries usedPrompt/promptNote so the UI can say what happened.
+    setPrompt("");
+    void generateForStudio(occasion, text);
   };
 
   const openSlotPicker = (slot: SlotKey) => {
@@ -397,7 +258,7 @@ export default function Studio() {
             />
             <button
               type="submit"
-              disabled={!prompt.trim()}
+              disabled={!prompt.trim() || generation.status === "working"}
               aria-label="Style from description"
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-bg transition active:scale-90 disabled:opacity-40"
             >
@@ -548,6 +409,16 @@ export default function Studio() {
               <p className="mt-3 text-[13.5px] font-semibold leading-relaxed">
                 {result.rationale}
               </p>
+              {result.promptNote && (
+                <p className="mx-auto mt-2 flex max-w-[300px] items-start justify-center gap-1.5 text-center text-[12px] font-semibold leading-snug text-mut">
+                  {result.usedPrompt ? (
+                    <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-acc" strokeWidth={3} />
+                  ) : (
+                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  )}
+                  {result.promptNote}
+                </p>
+              )}
               <div className="mt-3 flex flex-wrap justify-center gap-1.5">
                 {pieces.map((g) => (
                   <span
