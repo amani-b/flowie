@@ -7,15 +7,15 @@ import {
   COLOR_SWATCHES,
   cn,
   compressImage,
-  darken,
   isLightColor,
   uid,
 } from "../lib/utils";
 import type { Category, Formality, Garment, Warmth, ColorFamily, AccessoryKind } from "../types";
 import type { PatternKind } from "../lib/patternDetect";
 import GarmentCard from "../components/GarmentCard";
+import GarmentPhoto from "../components/GarmentPhoto";
 import Sheet from "../components/Sheet";
-import { GarmentGlyph, LogoMark } from "../components/icons";
+import { LogoMark } from "../components/icons";
 import { tagGarmentPhoto, taggingToGarment, type TaggingResult } from "../services/aiStylistService";
 
 type Filter = "all" | Category;
@@ -129,8 +129,8 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                   {p.imageDataUrl ? (
                     <img src={p.imageDataUrl} alt={p.name} className="h-full w-full object-cover" />
                   ) : (
-                    <div className="flex h-full w-full items-center justify-center">
-                      <GarmentGlyph category={p.category} kind={undefined} className="h-8 w-8 text-mut" />
+                    <div className="flex h-full w-full items-center justify-center px-1 text-center">
+                      <span className="line-clamp-2 text-[10px] font-extrabold text-mut">{p.name}</span>
                     </div>
                   )}
                 </div>
@@ -459,26 +459,23 @@ function AddForm({ onDone }: { onDone: () => void }) {
 
       <div>
         <label className="label-micro mb-1.5 block">Category</label>
-        <div className="grid grid-cols-6 gap-1.5">
+        <div className="grid grid-cols-3 gap-1.5">
           {CATEGORIES.map((c) => (
             <button
               key={c.id}
               onClick={() => setCategory(c.id)}
               className={cn(
-                "flex flex-col items-center gap-1 rounded-[14px] border py-2.5 transition-all",
+                "rounded-[14px] border px-2 py-2.5 text-center transition-all",
                 category === c.id
                   ? "border-acc bg-accsoft text-acc"
                   : "border-line text-mut active:scale-95"
               )}
             >
-              <GarmentGlyph
-                category={c.id}
-                kind="scarf"
-                className="h-6 w-6"
-                strokeWidth={8}
-              />
-              <span className="text-[8.5px] font-extrabold uppercase tracking-wide">
+              <span className="block text-[11px] font-extrabold">
                 {SHORT_CAT[c.id]}
+              </span>
+              <span className="mt-0.5 block text-[9px] font-bold opacity-70">
+                {c.label}
               </span>
             </button>
           ))}
@@ -609,22 +606,8 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
     <Sheet open={!!g} onClose={onClose} title={g?.name}>
       {g && (
         <div className="space-y-4">
-          <div
-            className="relative flex h-40 items-center justify-center overflow-hidden rounded-[20px]"
-            style={{
-              background: `linear-gradient(160deg, ${g.color}, ${darken(g.color, 0.25)})`,
-            }}
-          >
-            {g.photo ? (
-              <img src={g.photo} alt={g.name} className="absolute inset-0 h-full w-full object-cover" />
-            ) : (
-              <GarmentGlyph
-                category={g.category}
-                kind={g.kind}
-                className="h-24 w-24"
-                strokeWidth={5}
-              />
-            )}
+          <div className="relative h-56 overflow-hidden rounded-[20px]">
+            <GarmentPhoto garment={g} eager />
           </div>
 
           <div className="grid grid-cols-2 gap-2.5">

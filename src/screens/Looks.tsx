@@ -4,7 +4,7 @@ import { Search, Trash2, Wand2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { cn, OCCASION_META, timeAgo } from "../lib/utils";
 import type { Garment, SavedLook } from "../types";
-import Avatar from "../components/Avatar";
+import OutfitBoard from "../components/OutfitBoard";
 import Sheet from "../components/Sheet";
 import { LogoMark } from "../components/icons";
 
@@ -60,10 +60,11 @@ function LookSheet({ look, onClose }: { look: SavedLook | null; onClose: () => v
                 {timeAgo(look.createdAt)}
               </span>
             </div>
-            <Avatar
+            <OutfitBoard
               outfit={look.outfit}
               animateKey={look.id}
-              className="mx-auto w-[168px]"
+              className="mx-auto max-w-[280px]"
+              eager
             />
           </div>
 
@@ -274,7 +275,7 @@ export default function Looks() {
                 onClick={() => setSel(look)}
                 className="card rounded-[20px] p-3 text-left"
               >
-                <Avatar outfit={look.outfit} className="w-full" />
+                <OutfitBoard outfit={look.outfit} compact staticBoard />
                 <p className="mt-1.5 truncate text-[13px] font-extrabold">{look.name}</p>
                 <div className="mt-1 flex items-center gap-1.5">
                   <span className="rounded-full bg-accsoft px-2 py-0.5 text-[9px] font-extrabold tracking-[0.12em] text-acc">

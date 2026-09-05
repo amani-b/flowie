@@ -25,7 +25,7 @@ import {
 import { useAppStore } from "../store/appStore";
 import { BUCKET_META, cn, firstName, formatTemp, greeting, timeAgo, todayLabel } from "../lib/utils";
 import type { Garment, WeatherIconKind } from "../types";
-import FitAvatar from "../components/FitAvatar";
+import OutfitBoard from "../components/OutfitBoard";
 import Sheet from "../components/Sheet";
 import { WeatherSkeleton } from "../components/Skeletons";
 import { geminiReady } from "../services/stylist";
@@ -243,9 +243,6 @@ export default function Home() {
 
         {garments.length === 0 ? (
           <div className="py-2 text-center">
-            <div className="mx-auto w-[104px] opacity-70">
-              <FitAvatar outfit={{}} className="w-full" />
-            </div>
             <p className="mt-1 text-[15px] font-extrabold">The rail is empty</p>
             <p className="mx-auto mt-1 max-w-[255px] text-[12.5px] font-medium leading-relaxed text-mut">
               No pieces in your closet yet. Start from scratch, or borrow the
@@ -267,7 +264,7 @@ export default function Home() {
             </div>
           </div>
         ) : !today ? (
-          <div className="flex items-center gap-4 py-1">
+          <div className="py-1">
             <div className="min-w-0 flex-1">
               <p className="text-[15px] font-extrabold">Nothing pinned for today</p>
               <p className="mt-1 text-[12.5px] font-medium leading-relaxed text-mut">
@@ -291,12 +288,13 @@ export default function Home() {
                 )}
               </div>
             </div>
-            <div className="w-[92px] shrink-0 opacity-50 grayscale">
-              <FitAvatar outfit={{}} className="w-full" />
-            </div>
           </div>
         ) : (
-          <div className="flex gap-4">
+          <div className="flex flex-col gap-4">
+            <OutfitBoard
+              outfit={today.outfit}
+              animateKey={todayPieces.map((p) => p.id).join(".")}
+            />
             <div className="min-w-0 flex-1">
               <p className="text-[13.5px] font-semibold leading-relaxed">{today.rationale}</p>
               <div className="mt-3 flex flex-wrap gap-1.5">
@@ -330,11 +328,6 @@ export default function Home() {
                 </button>
               </div>
             </div>
-            <FitAvatar
-              outfit={today.outfit}
-              animateKey={todayPieces.map((p) => p.id).join(".")}
-              className="w-[122px] shrink-0 self-center"
-            />
           </div>
         )}
       </motion.section>
@@ -383,9 +376,9 @@ export default function Home() {
               <button
                 key={look.id}
                 onClick={() => setTab("looks")}
-                className="card w-[118px] shrink-0 rounded-[18px] p-2 text-left transition active:scale-95"
+                className="card w-[132px] shrink-0 rounded-[18px] p-2 text-left transition active:scale-95"
               >
-                <FitAvatar outfit={look.outfit} className="w-full" />
+                <OutfitBoard outfit={look.outfit} compact staticBoard />
                 <p className="mt-1 truncate px-0.5 text-[11px] font-extrabold">{look.name}</p>
                 <p className="px-0.5 text-[9.5px] font-bold text-mut">{timeAgo(look.createdAt)}</p>
               </button>

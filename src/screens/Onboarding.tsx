@@ -3,8 +3,8 @@ import { AnimatePresence, motion, type PanInfo } from "framer-motion";
 import { ArrowLeft, ArrowRight, Check } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { cn, firstName, isLightColor } from "../lib/utils";
-import type { BodyShape, ColorFamily, StylePrefs } from "../types";
-import FitAvatar, { BODY_SHAPES, SKIN_TONES } from "../components/FitAvatar";
+import type { ColorFamily, StylePrefs } from "../types";
+import OutfitBoard from "../components/OutfitBoard";
 import { LogoMark } from "../components/icons";
 import { PLACEHOLDER_OUTFIT } from "../lib/mock";
 
@@ -28,29 +28,8 @@ export default function Onboarding() {
   const user = useAppStore((s) => s.user);
   const stylePrefs = useAppStore((s) => s.stylePrefs);
   const setStylePrefs = useAppStore((s) => s.setStylePrefs);
-  const profile = useAppStore((s) => s.profile);
-  const setProfile = useAppStore((s) => s.setProfile);
   const completeOnboarding = useAppStore((s) => s.completeOnboarding);
   const notify = useAppStore((s) => s.notify);
-
-  const skinTone = profile?.avatarConfig?.skinTone;
-  const bodyShape: BodyShape = profile?.avatarConfig?.bodyShape ?? "average";
-
-  const setSkin = (hex: string) =>
-    setProfile({
-      userId: user?.id ?? "local",
-      avatarUrl: profile?.avatarUrl ?? null,
-      avatarConfig: { ...profile?.avatarConfig, skinTone: hex },
-      bodyMetrics: profile?.bodyMetrics ?? null,
-    });
-
-  const setShape = (shape: BodyShape) =>
-    setProfile({
-      userId: user?.id ?? "local",
-      avatarUrl: profile?.avatarUrl ?? null,
-      avatarConfig: { ...profile?.avatarConfig, bodyShape: shape },
-      bodyMetrics: profile?.bodyMetrics ?? null,
-    });
 
   const [step, setStep] = useState(0);
   const [dir, setDir] = useState(1);
@@ -151,12 +130,12 @@ export default function Onboarding() {
                 </h2>
                 <p className="mx-auto mt-3 max-w-[280px] text-[13.5px] font-semibold leading-relaxed text-mut">
                   Three quick steps — your palette, your default vibe, and a
-                  first look at the mannequin that models your outfits.
+                  first look at your outfit board.
                 </p>
                 <div className="mx-auto mt-6 flex max-w-[280px] flex-col gap-2 text-left">
                   {[
                     "Weather-aware outfit picks",
-                    "A 2D fit preview, not guesswork",
+                    "A photo board of every outfit",
                     "Saved looks you can schedule",
                   ].map((t, i) => (
                     <motion.div
@@ -257,69 +236,24 @@ export default function Onboarding() {
               </div>
             )}
 
-            {/* ---------------- step 2 · fit model ---------------- */}
+            {/* ---------------- step 2 · outfit board ---------------- */}
             {step === 2 && (
               <div className="text-center">
                 <p className="label-micro">Step 3 of 3</p>
                 <h2 className="mt-2 font-display text-[30px] font-extrabold tracking-tight">
-                  Meet your model.
+                  Your outfits, on a board.
                 </h2>
-                <div className="relative mx-auto mt-4 w-[150px]">
-                  <div className="card relative overflow-hidden rounded-[26px] pt-2">
-                    <FitAvatar outfit={PLACEHOLDER_OUTFIT} animateKey="onboard" className="w-full" />
+                <div className="relative mx-auto mt-4 max-w-[230px]">
+                  <div className="card relative overflow-hidden rounded-[26px] p-3">
+                    <OutfitBoard outfit={PLACEHOLDER_OUTFIT} animateKey="onboard" />
                   </div>
                   <span className="absolute -top-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-acc px-2.5 py-1 text-[8.5px] font-extrabold tracking-[0.16em] text-accink">
                     LIVE PREVIEW
                   </span>
                 </div>
-                {/* skin tone */}
-                <p className="label-micro mt-4">Skin tone</p>
-                <div className="mt-2 flex justify-center gap-2">
-                  {SKIN_TONES.map((t) => (
-                    <button
-                      key={t.hex}
-                      onClick={() => setSkin(t.hex)}
-                      title={t.label}
-                      aria-label={`Skin tone ${t.label}`}
-                      className={cn(
-                        "flex h-9 w-9 items-center justify-center rounded-full border-2 transition active:scale-90",
-                        skinTone === t.hex ? "border-acc" : "border-line"
-                      )}
-                      style={{ background: t.hex }}
-                    >
-                      {skinTone === t.hex && (
-                        <Check
-                          className={cn(
-                            "h-4 w-4",
-                            isLightColor(t.hex) ? "text-black/70" : "text-white"
-                          )}
-                          strokeWidth={3.4}
-                        />
-                      )}
-                    </button>
-                  ))}
-                </div>
-                {/* body shape */}
-                <p className="label-micro mt-4">Build</p>
-                <div className="mt-2 flex justify-center gap-1.5">
-                  {BODY_SHAPES.map((b) => (
-                    <button
-                      key={b.id}
-                      onClick={() => setShape(b.id)}
-                      className={cn(
-                        "rounded-full border px-3.5 py-1.5 text-[12px] font-extrabold transition active:scale-95",
-                        bodyShape === b.id
-                          ? "border-transparent bg-ink text-bg"
-                          : "border-line bg-card text-mut"
-                      )}
-                    >
-                      {b.label}
-                    </button>
-                  ))}
-                </div>
                 <p className="mx-auto mt-4 max-w-[290px] text-[12px] font-semibold leading-relaxed text-mut">
-                  Your picks dress the preview everywhere — and you can change
-                  them later from Settings.
+                  Every outfit shows your real garment photos — tap to combine
+                  pieces into one flat-lay, tap again to browse them separately.
                 </p>
               </div>
             )}
