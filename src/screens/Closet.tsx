@@ -276,7 +276,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
           </button>
           <button
             onClick={confirmAndSave}
-            className="flex-1 rounded-[16px] bg-acc py-3 font-display text-[15px] font-extrabold text-accink transition active:scale-[0.98]"
+            className="flex-1 rounded-[16px] bg-acc py-3 text-[15px] font-extrabold text-accink transition active:scale-[0.98]"
           >
             Save {pending.length} Item{pending.length > 1 ? "s" : ""}
           </button>
@@ -363,7 +363,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
         <button
           onClick={analyzeFiles}
           disabled={analyzing || files.length === 0}
-          className="flex flex-1 items-center justify-center gap-2 rounded-[16px] bg-acc py-3 font-display text-[15px] font-extrabold text-accink transition active:scale-[0.98] disabled:opacity-50"
+          className="flex flex-1 items-center justify-center gap-2 rounded-[16px] bg-acc py-3 text-[15px] font-extrabold text-accink transition active:scale-[0.98] disabled:opacity-50"
         >
           {analyzing ? (
             <>
@@ -575,7 +575,7 @@ function AddForm({ onDone }: { onDone: () => void }) {
 
       <button
         onClick={submit}
-        className="w-full rounded-[16px] bg-acc py-3.5 font-display text-[15px] font-extrabold text-accink transition active:scale-[0.98]"
+        className="w-full rounded-[16px] bg-acc py-3.5 text-[15px] font-extrabold text-accink transition active:scale-[0.98]"
       >
         Add to closet
       </button>
