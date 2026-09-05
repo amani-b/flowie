@@ -2,18 +2,18 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangle, ArrowLeftRight, Bookmark, Briefcase, Check, Coffee, Expand, Flame, Info, Plus, RefreshCw, Send, Shirt, Snowflake, Wand2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
-import { cn, darken, OCCASION_META, VIBE_TO_OCCASION } from "../lib/utils";
+import { cn, OCCASION_META, VIBE_TO_OCCASION } from "../lib/utils";
 import type { Category, Garment, Occasion, Outfit } from "../types";
-import FitAvatar from "../components/FitAvatar";
+import OutfitBoard from "../components/OutfitBoard";
+import GarmentPhoto from "../components/GarmentPhoto";
 import Sheet from "../components/Sheet";
 import { StudioSkeleton } from "../components/Skeletons";
-import { GarmentGlyph } from "../components/icons";
 import { applyTweak, type TweakKind } from "../services/stylist";
 
 const STAGES = [
   "Reading the sky…",
   "Raiding the closet…",
-  "Checking the mirror…",
+  "Laying out the board…",
 ];
 
 function outfitPieces(o: Record<string, Garment | undefined>): Garment[] {
@@ -349,19 +349,21 @@ export default function Studio() {
               })}
             </div>
 
-            {/* Avatar preview — tap for full-screen */}
-            <button
-              onClick={() => pieces.length > 0 && setZoom({ ...manualOutfit })}
-              aria-label="Preview look full-screen"
-              className="group relative mx-auto mt-6 block w-[190px]"
-            >
-              <FitAvatar outfit={manualOutfit} className="w-full" />
-              {pieces.length > 0 && (
-                <span className="absolute bottom-1 right-1 flex h-7 w-7 items-center justify-center rounded-full border border-line bg-card/90 text-mut transition group-active:scale-90">
-                  <Expand className="h-3.5 w-3.5" />
-                </span>
-              )}
-            </button>
+            {/* Outfit board preview — tap pieces to combine/separate, expand for full-screen */}
+            <div className="mx-auto mt-6 max-w-[280px]">
+              <OutfitBoard outfit={manualOutfit} />
+            </div>
+            {pieces.length > 0 && (
+              <div className="mt-2 flex justify-center">
+                <button
+                  onClick={() => setZoom({ ...manualOutfit })}
+                  aria-label="Preview look full-screen"
+                  className="flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11px] font-extrabold text-mut transition active:scale-95"
+                >
+                  <Expand className="h-3.5 w-3.5" /> Full-screen
+                </button>
+              </div>
+            )}
 
             {/* Save button */}
             <div className="mt-4 flex justify-center gap-2">
@@ -421,20 +423,21 @@ export default function Studio() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, ease: "easeOut" }}
             >
-              <button
-                onClick={() => setZoom(result.outfit)}
-                aria-label="Preview look full-screen"
-                className="group relative mx-auto block w-[190px]"
-              >
-                <FitAvatar
+              <div className="mx-auto max-w-[280px]">
+                <OutfitBoard
                   outfit={result.outfit}
                   animateKey={pieces.map((p) => p.id).join(".")}
-                  className="w-full"
                 />
-                <span className="absolute bottom-1 right-1 flex h-7 w-7 items-center justify-center rounded-full border border-line bg-card/90 text-mut transition group-active:scale-90">
-                  <Expand className="h-3.5 w-3.5" />
-                </span>
-              </button>
+              </div>
+              <div className="mt-2 flex justify-center">
+                <button
+                  onClick={() => setZoom(result.outfit)}
+                  aria-label="Preview look full-screen"
+                  className="flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11px] font-extrabold text-mut transition active:scale-95"
+                >
+                  <Expand className="h-3.5 w-3.5" /> Full-screen
+                </button>
+              </div>
               <p className="mt-3 text-[13.5px] font-semibold leading-relaxed">
                 {result.rationale}
               </p>
@@ -527,8 +530,8 @@ export default function Studio() {
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              <div className="mt-2 w-[min(72vw,300px)]">
-                <FitAvatar outfit={zoom} className="w-full" />
+              <div className="mx-auto mt-2 w-full max-w-[320px]">
+                <OutfitBoard outfit={zoom} eager />
               </div>
               <div className="mt-3 flex max-w-full flex-wrap justify-center gap-1.5">
                 {zoomPieces.map((g) => (
@@ -574,18 +577,7 @@ export default function Studio() {
                 className="card overflow-hidden rounded-[18px] text-left"
               >
                 <div className="relative aspect-[4/5]">
-                  {g.photo ? (
-                    <img src={g.photo} alt={g.name} className="h-full w-full object-cover" />
-                  ) : (
-                    <div
-                      className="flex h-full w-full items-center justify-center"
-                      style={{
-                        background: `linear-gradient(160deg, ${g.color} 0%, ${darken(g.color, 0.22)} 100%)`,
-                      }}
-                    >
-                      <GarmentGlyph category={g.category} kind={g.kind} className="h-[54%] w-[54%]" strokeWidth={5.5} />
-                    </div>
-                  )}
+                  <GarmentPhoto garment={g} />
                 </div>
                 <div className="px-3 py-2.5">
                   <p className="truncate text-[12.5px] font-extrabold">{g.name}</p>

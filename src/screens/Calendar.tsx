@@ -4,7 +4,7 @@ import { Calendar, ChevronLeft, ChevronRight, Clock, Trash2 } from "lucide-react
 import { useAppStore } from "../store/appStore";
 import { cn, timeAgo } from "../lib/utils";
 import type { SavedLook } from "../types";
-import Avatar from "../components/Avatar";
+import OutfitBoard from "../components/OutfitBoard";
 import Sheet from "../components/Sheet";
 import { OCCASION_META } from "../lib/utils";
 
@@ -93,7 +93,7 @@ function ScheduleSheet({
         {scheduledLook && (
           <div className="card rounded-[20px] p-4">
             <p className="label-micro mb-2">Currently scheduled</p>
-            <Avatar outfit={scheduledLook.outfit} className="mx-auto w-[140px]" />
+            <OutfitBoard outfit={scheduledLook.outfit} className="mx-auto max-w-[240px]" />
             <p className="mt-2 text-center text-[13px] font-extrabold">{scheduledLook.name}</p>
             <p className="text-center text-[11px] font-bold text-mut">
               {OCCASION_META[scheduledLook.occasion].label} · {timeAgo(scheduledLook.createdAt)}
@@ -120,7 +120,7 @@ function ScheduleSheet({
                       : "border-line bg-card hover:border-linestrong"
                   )}
                 >
-                  <Avatar outfit={look.outfit} className="w-full" />
+                  <OutfitBoard outfit={look.outfit} compact staticBoard />
                   <p className="mt-1 truncate text-[11px] font-extrabold">{look.name}</p>
                   <p className="text-[9px] font-bold text-mut">
                     {OCCASION_META[look.occasion].label}
@@ -449,7 +449,9 @@ export default function CalendarView() {
                           {OCCASION_META[look.occasion].label}
                         </p>
                       </div>
-                      <Avatar outfit={look.outfit} className="h-14 w-14" />
+                      <div className="w-20 shrink-0">
+                        <OutfitBoard outfit={look.outfit} compact staticBoard />
+                      </div>
                     </motion.div>
                   ))}
                 </div>
@@ -512,7 +514,9 @@ export default function CalendarView() {
                         {OCCASION_META[look.occasion].label}
                       </p>
                     </div>
-                    <Avatar outfit={look.outfit} className="h-14 w-14" />
+                    <div className="w-20 shrink-0">
+                      <OutfitBoard outfit={look.outfit} compact staticBoard />
+                    </div>
                     <button
                       onClick={() => handleClear(key)}
                       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-mut transition hover:bg-dangersoft hover:text-danger active:scale-95"

@@ -1,68 +1,6 @@
 import { motion } from "framer-motion";
 import type { Garment } from "../types";
-import { darken, isLightColor } from "../lib/utils";
-import { GarmentGlyph } from "./icons";
-
-/** Render a color swatch that supports multi-color garments */
-function renderSwatch(garment: Garment): React.CSSProperties {
-  // Defensive: handle missing colors array
-  const colors = garment.colors ?? [garment.color];
-  const pattern = garment.pattern ?? "solid";
-  
-  // Single color or solid pattern: use simple gradient as before
-  if (colors.length === 1 || pattern === "solid") {
-    return {
-      background: `linear-gradient(160deg, ${garment.color} 0%, ${darken(garment.color, 0.22)} 100%)`,
-    };
-  }
-
-  // Multi-color garments: create pattern-based backgrounds
-  const [c1, c2, c3] = colors;
-
-  if (pattern === "striped") {
-    // Diagonal stripes for striped patterns
-    return {
-      backgroundImage: `repeating-linear-gradient(
-        45deg,
-        ${c1},
-        ${c1} 8px,
-        ${c2 || c1} 8px,
-        ${c2 || c1} 16px
-      )`,
-    };
-  }
-
-  if (pattern === "colorblock") {
-    // Hard-stop horizontal blocks for colorblock
-    if (c3) {
-      return {
-        backgroundImage: `linear-gradient(
-          to bottom,
-          ${c1} 0%, ${c1} 33%,
-          ${c2} 33%, ${c2} 66%,
-          ${c3} 66%, ${c3} 100%
-        )`,
-      };
-    }
-    return {
-      backgroundImage: `linear-gradient(
-        to bottom,
-        ${c1} 0%, ${c1} 50%,
-        ${c2} 50%, ${c2} 100%
-      )`,
-    };
-  }
-
-  // For 'other' pattern, use a soft gradient across all colors
-  if (c3) {
-    return {
-      background: `linear-gradient(160deg, ${c1} 0%, ${c2} 50%, ${c3} 100%)`,
-    };
-  }
-  return {
-    background: `linear-gradient(160deg, ${c1} 0%, ${c2 || c1} 100%)`,
-  };
-}
+import GarmentPhoto from "./GarmentPhoto";
 
 export default function GarmentCard({
   garment,
@@ -71,10 +9,6 @@ export default function GarmentCard({
   garment: Garment;
   onOpen: (g: Garment) => void;
 }) {
-  const light = isLightColor(garment.color);
-  const glyphColor = light ? darken(garment.color, 0.55) : "#F7F6F2";
-  const swatchStyle = renderSwatch(garment);
-
   return (
     <motion.button
       layout
@@ -86,27 +20,10 @@ export default function GarmentCard({
       onClick={() => onOpen(garment)}
       className="card overflow-hidden rounded-[18px] text-left"
     >
-      <div
-        className="relative flex aspect-[4/5] items-center justify-center"
-        style={swatchStyle}
-      >
-        {garment.photo ? (
-          <img
-            src={garment.photo}
-            alt={garment.name}
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-        ) : (
-          <GarmentGlyph
-            category={garment.category}
-            kind={garment.kind}
-            className="h-[54%] w-[54%] drop-shadow-sm"
-            strokeWidth={5.5}
-          />
-        )}
+      <div className="relative aspect-[4/5]">
+        <GarmentPhoto garment={garment} />
         <span
-          className="absolute right-2 top-2 flex gap-[3px]"
-          style={{ color: glyphColor }}
+          className="absolute right-2 top-2 flex gap-[3px] rounded-full bg-black/35 px-1.5 py-1 backdrop-blur-sm"
           title={`Warmth ${garment.warmth}/3`}
         >
           {[1, 2, 3].map((i) => (
@@ -116,26 +33,12 @@ export default function GarmentCard({
               style={{
                 background:
                   i <= garment.warmth
-                    ? light
-                      ? "rgba(0,0,0,0.55)"
-                      : "rgba(255,255,255,0.9)"
-                    : light
-                      ? "rgba(0,0,0,0.18)"
-                      : "rgba(255,255,255,0.28)",
+                    ? "rgba(255,255,255,0.95)"
+                    : "rgba(255,255,255,0.35)",
               }}
             />
           ))}
         </span>
-        {garment.photo && (
-          <span className="absolute bottom-2 right-2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm">
-            <GarmentGlyph
-              category={garment.category}
-              kind={garment.kind}
-              className="h-4 w-4"
-              strokeWidth={8}
-            />
-          </span>
-        )}
       </div>
       <div className="px-3 py-2.5">
         <p className="truncate text-[12.5px] font-extrabold">{garment.name}</p>

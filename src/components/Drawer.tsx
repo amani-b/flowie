@@ -15,8 +15,6 @@ import {
 import { useAppStore } from "../store/appStore";
 import { geminiReady } from "../services/stylist";
 import { cn } from "../lib/utils";
-import { BODY_SHAPES, SKIN_TONES } from "./FitAvatar";
-import type { BodyShape } from "../types";
 
 function Seg<T extends string>({
   value,
@@ -63,18 +61,6 @@ export default function Drawer() {
   const clearAllData = useAppStore((s) => s.clearAllData);
   const user = useAppStore((s) => s.user);
   const mode = useAppStore((s) => s.mode);
-  const profile = useAppStore((s) => s.profile);
-  const setProfile = useAppStore((s) => s.setProfile);
-
-  const skinTone = profile?.avatarConfig?.skinTone;
-  const bodyShape: BodyShape = profile?.avatarConfig?.bodyShape ?? "average";
-  const setAvatarConfig = (patch: { skinTone?: string; bodyShape?: BodyShape }) =>
-    setProfile({
-      userId: user?.id ?? "local",
-      avatarUrl: profile?.avatarUrl ?? null,
-      avatarConfig: { ...profile?.avatarConfig, ...patch },
-      bodyMetrics: profile?.bodyMetrics ?? null,
-    });
   const signOutUser = useAppStore((s) => s.signOutUser);
   const installPrompt = useAppStore((s) => s.installPrompt);
   const setInstallPrompt = useAppStore((s) => s.setInstallPrompt);
@@ -206,45 +192,6 @@ export default function Drawer() {
                     { v: "F", label: "°F" },
                   ]}
                 />
-              </section>
-
-              <section className="space-y-2.5">
-                <p className="label-micro">Fit model</p>
-                <div className="card rounded-[20px] p-4">
-                  <p className="mb-2 text-[10.5px] font-extrabold text-mut">Skin tone</p>
-                  <div className="flex gap-2">
-                    {SKIN_TONES.map((t) => (
-                      <button
-                        key={t.hex}
-                        onClick={() => setAvatarConfig({ skinTone: t.hex })}
-                        title={t.label}
-                        aria-label={`Skin tone ${t.label}`}
-                        className={cn(
-                          "h-8 w-8 rounded-full border-2 transition active:scale-90",
-                          skinTone === t.hex ? "border-acc" : "border-line"
-                        )}
-                        style={{ background: t.hex }}
-                      />
-                    ))}
-                  </div>
-                  <p className="mb-2 mt-3 text-[10.5px] font-extrabold text-mut">Build</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {BODY_SHAPES.map((b) => (
-                      <button
-                        key={b.id}
-                        onClick={() => setAvatarConfig({ bodyShape: b.id })}
-                        className={cn(
-                          "rounded-full border px-3 py-1.5 text-[11.5px] font-extrabold transition active:scale-95",
-                          bodyShape === b.id
-                            ? "border-transparent bg-ink text-bg"
-                            : "border-line text-mut"
-                        )}
-                      >
-                        {b.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
               </section>
 
               <section className="space-y-2.5">
