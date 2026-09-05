@@ -224,6 +224,26 @@ function sanitizeIds(ids: unknown, valid: Set<string>): string[] {
   return [...toSet(ids)].filter((id) => isUuidLike(id) && valid.has(id));
 }
 
+// Cloud hydrate must never wipe items created on-device while the fetch was
+// in flight (upload → jump to Studio during a slow hydrate on fresh open).
+// Anything in current state whose id isn't in the fetched set is local-only
+// (pending sync or added mid-flight) — keep it, newest first, in front.
+function mergeKeptLocal<T extends { id: string; createdAt: number }>(
+  current: T[],
+  fetched: T[]
+): T[] {
+  const fetchedIds = new Set(fetched.map((i) => i.id));
+  const localOnly = current
+    .filter((i) => !fetchedIds.has(i.id))
+    .sort((a, b) => b.createdAt - a.createdAt);
+  return [...localOnly, ...fetched];
+}
+
+function mergeSchedules(current: Schedule[], fetched: Schedule[]): Schedule[] {
+  const fetchedIds = new Set(fetched.map((s) => s.id));
+  return [...current.filter((s) => !fetchedIds.has(s.id)), ...fetched];
+}
+
 export const useAppStore = create<AppStore>()(
   persist(
     (set, get) => ({
@@ -353,9 +373,16 @@ export const useAppStore = create<AppStore>()(
             scheduledDate: r.scheduled_date,
             createdAt: new Date(r.created_at).getTime(),
           }));
-          // Only apply if this account is still active.
+          // Only apply if this account is still active. Merge — never
+          // replace — so garments/looks added on-device while this fetch
+          // was in flight survive the hydrate instead of being wiped.
           if (get().user?.id === user.id) {
-            set({ garments, looks, schedules });
+            const s = get();
+            set({
+              garments: mergeKeptLocal(s.garments, garments),
+              looks: mergeKeptLocal(s.looks, looks),
+              schedules: mergeSchedules(s.schedules, schedules),
+            });
           }
         } catch (error: any) {
           console.error("Error in hydrateFromCloud:", error?.message ?? error, error?.status);
@@ -374,7 +401,12 @@ export const useAppStore = create<AppStore>()(
               createdAt: new Date(r.created_at).getTime(),
             }));
             if (get().user?.id === user.id) {
-              set({ garments: retryData.garments, looks: retryData.looks, schedules });
+              const s = get();
+              set({
+                garments: mergeKeptLocal(s.garments, retryData.garments),
+                looks: mergeKeptLocal(s.looks, retryData.looks),
+                schedules: mergeSchedules(s.schedules, schedules),
+              });
             }
             return;
           } catch (retryError: any) {
@@ -463,15 +495,24 @@ export const useAppStore = create<AppStore>()(
 
       /* ----------------------------- data ----------------------------- */
       addGarment: async (g, photoDataUrl) => {
-        // Generate stable UUID upfront for sync consistency
+        // Generate stable UUID upfront for sync consistency. Callers may
+        // pass a full Garment (e.g. from taggingToGarment) carrying a local
+        // "g-…" id — strip it so it can never clobber the uuid: non-uuid
+        // ids can never sync to Postgres and get scrubbed as legacy junk.
+        const { id: _incomingId, createdAt: _incomingAt, syncStatus: _incomingSync, ...rest } =
+          g as Partial<Garment> & Omit<Garment, "id" | "createdAt">;
+        void _incomingId;
+        void _incomingAt;
+        void _incomingSync;
         const id = crypto.randomUUID();
-        
+
         // Normalize incoming garment to ensure colors/pattern are always present
         const normalizedGarment: Garment = {
+          ...rest as Omit<Garment, "id" | "createdAt">,
           id,
-          ...g,
-          colors: g.colors?.length ? g.colors : [g.color],
-          pattern: g.pattern ?? "solid",
+          colors: rest.colors?.length ? rest.colors : [rest.color!],
+          pattern: rest.pattern ?? "solid",
+          photo: photoDataUrl ?? rest.photo,
           createdAt: Date.now(),
           syncStatus: "pending",
         };
