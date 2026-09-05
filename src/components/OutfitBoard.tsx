@@ -168,7 +168,7 @@ export default function OutfitBoard({
           </div>
         </motion.div>
       ) : (
-        /* ------- separate: independent floating cutouts ------- */
+        /* ------- separate: independent floating renderings ------- */
         <motion.div
           onClick={interactive ? toggle : undefined}
           role={interactive ? "button" : undefined}

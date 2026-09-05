@@ -22,6 +22,7 @@ import type {
 import { DEMO_OUTFITS, DEMO_WARDROBE } from "../lib/mock";
 import { fetchWeather } from "../services/weather";
 import { generateStyle } from "../services/stylist";
+import { primeRendering } from "../services/renderService";
 import {
   appMode,
   enterDemoMode as demoEnter,
@@ -524,6 +525,11 @@ export const useAppStore = create<AppStore>()(
             pendingGarments: new Set(toSet(s._syncState.pendingGarments)).add(id),
           }
         }));
+
+        // Warm the generated studio-rendering cache now so the new piece
+        // shows its rendering (not a fallback) the moment Studio opens.
+        // Fire-and-forget: never blocks the save or cloud sync below.
+        primeRendering(normalizedGarment);
 
         const user = get().user;
         if (!user || user.isDemo) {
