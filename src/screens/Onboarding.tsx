@@ -281,7 +281,7 @@ export default function Onboarding() {
         <motion.button
           whileTap={{ scale: 0.97 }}
           onClick={() => (step === STEP_COUNT - 1 ? finish() : go(step + 1))}
-          className="flex h-[52px] flex-1 items-center justify-center gap-2 rounded-full bg-acc font-display text-[15.5px] font-extrabold text-accink"
+          className="flex h-[52px] flex-1 items-center justify-center gap-2 rounded-full bg-acc text-[15.5px] font-extrabold text-accink"
         >
           {step === STEP_COUNT - 1 ? (
             <>

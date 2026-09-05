@@ -314,14 +314,14 @@ export default function Home() {
               <div className="mt-4 flex gap-2">
                 <button
                   onClick={() => void generateToday(today.occasion)}
-                  className="flex items-center gap-1.5 rounded-full bg-acc px-4 py-2 text-[12.5px] font-extrabold text-accink transition active:scale-95"
+                  className="flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-acc px-4 text-[12.5px] font-extrabold text-accink transition active:scale-95"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
                   New idea
                 </button>
                 <button
                   onClick={() => setTab("studio")}
-                  className="flex items-center gap-1.5 rounded-full border border-line px-4 py-2 text-[12.5px] font-extrabold text-mut transition active:scale-95"
+                  className="flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-line px-4 text-[12.5px] font-extrabold text-mut transition active:scale-95"
                 >
                   Studio
                   <ArrowRight className="h-3.5 w-3.5" />

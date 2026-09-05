@@ -268,7 +268,7 @@ export default function AuthScreen() {
                 whileTap={{ scale: 0.98 }}
                 type="submit"
                 disabled={busy !== null}
-                className="flex w-full items-center justify-center gap-2 rounded-[15px] bg-acc py-3.5 font-display text-[15px] font-extrabold text-accink transition disabled:opacity-70"
+                className="flex w-full items-center justify-center gap-2 rounded-[15px] bg-acc py-3.5 text-[15px] font-extrabold text-accink transition disabled:opacity-70"
               >
                 {busy === "submit" ? (
                   <>
