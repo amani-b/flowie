@@ -1,5 +1,5 @@
 import type { Garment, Category, ColorFamily, Warmth, Formality } from "../types";
-import { uid, hexToRgb } from "../lib/utils";
+import { hexToRgb } from "../lib/utils";
 import { detectPattern, rgbToHex, type PixelSample } from "../lib/patternDetect";
 
 /**
@@ -435,10 +435,9 @@ export async function tagGarmentPhoto(imageDataUrl: string, fileName: string): P
   return tagGarmentHeuristic(file, imageDataUrl);
 }
 
-/** Convert TaggingResult to a full Garment object. */
-export function taggingToGarment(t: TaggingResult, imageDataUrl?: string): Garment {
+/** Convert TaggingResult to garment fields. The store mints the id/createdAt. */
+export function taggingToGarment(t: TaggingResult, imageDataUrl?: string): Omit<Garment, "id" | "createdAt"> {
   return {
-    id: uid("g"),
     name: t.name,
     category: t.category,
     color: t.colors[0], // primary/dominant color
@@ -450,6 +449,5 @@ export function taggingToGarment(t: TaggingResult, imageDataUrl?: string): Garme
     formality: t.formality,
     kind: t.category === "accessory" ? (t.tags.find((tag) => ["scarf", "cap", "bag"].includes(tag)) as any) : undefined,
     photo: imageDataUrl,
-    createdAt: Date.now(),
   };
 }

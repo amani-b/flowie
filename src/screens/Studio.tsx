@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangle, ArrowLeftRight, Bookmark, Briefcase, Check, Coffee, Expand, Flame, Info, Plus, RefreshCw, Send, Shirt, Snowflake, Wand2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { cn, darken, OCCASION_META, VIBE_TO_OCCASION } from "../lib/utils";
-import type { Garment, Occasion, Outfit } from "../types";
+import type { Category, Garment, Occasion, Outfit } from "../types";
 import FitAvatar from "../components/FitAvatar";
 import Sheet from "../components/Sheet";
 import { StudioSkeleton } from "../components/Skeletons";
@@ -43,6 +43,31 @@ const SLOT_LABELS: Record<SlotKey, string> = {
   outer: "Outerwear",
   shoes: "Shoes",
   accessory: "Accessory",
+};
+
+/**
+ * Outfit slots ("outer") vs garment categories ("outerwear") use different
+ * strings for the same thing. This map is the single translation point
+ * between the manual-styling picker and the closet data — every filter and
+ * every slot assignment must go through it, otherwise outerwear silently
+ * never matches and the picker reports "Nothing here yet".
+ */
+const SLOT_TO_CATEGORY: Record<SlotKey, Category> = {
+  top: "top",
+  bottom: "bottom",
+  dress: "dress",
+  outer: "outerwear",
+  shoes: "shoes",
+  accessory: "accessory",
+};
+
+const CATEGORY_TO_SLOT: Record<Category, SlotKey> = {
+  top: "top",
+  bottom: "bottom",
+  dress: "dress",
+  outerwear: "outer",
+  shoes: "shoes",
+  accessory: "accessory",
 };
 
 export default function Studio() {
@@ -107,21 +132,24 @@ export default function Studio() {
   };
 
   const selectGarmentForSlot = (g: Garment) => {
+    // Route the garment into the correct outfit slot via the category map
+    // (a garment stored as "outerwear" belongs in the "outer" slot).
+    const slot = CATEGORY_TO_SLOT[g.category];
     setManualOutfit((prev) => {
       const next: Outfit = { ...prev };
       // Dress is mutually exclusive with top/bottom
-      if (g.category === "dress") {
+      if (slot === "dress") {
         delete next.top;
         delete next.bottom;
         next.dress = g;
-      } else if (g.category === "top") {
+      } else if (slot === "top") {
         delete next.dress;
         next.top = g;
-      } else if (g.category === "bottom") {
+      } else if (slot === "bottom") {
         delete next.dress;
         next.bottom = g;
       } else {
-        next[g.category as keyof Outfit] = g;
+        next[slot] = g;
       }
       return next;
     });
@@ -136,7 +164,8 @@ export default function Studio() {
     });
   };
 
-  const getGarmentsByCategory = (cat: string): Garment[] => {
+  const getGarmentsByCategory = (slot: SlotKey): Garment[] => {
+    const cat = SLOT_TO_CATEGORY[slot];
     return garments.filter((g) => g.category === cat);
   };
 
