@@ -722,6 +722,145 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
   );
 }
 
+/* --------------------------- upgrade banner --------------------------- */
+
+/**
+ * Phase 5 rollout — explicit opt-in "Upgrade my closet" banner.
+ *
+ * Recommendation rationale: an automatic background sweep would burst the
+ * ~5/day free ZeroGPU quota by surprise on a 40-item closet. An explicit
+ * button keeps the cost visible and consenting: one kick per minute,
+ * max ~4 enhance calls per day (headroom left for fresh imports), fully
+ * pausable/cancellable, progress persisted across reloads. The user keeps
+ * using the app between ticks — each tick is a single setTimeout kick
+ * into the existing serial Phase 1→4 chains, never a blocking await.
+ */
+function UpgradeBanner() {
+  const garments = useAppStore((s) => s.garments);
+  const user = useAppStore((s) => s.user);
+  const upgrade = useAppStore((s) => s.closetUpgrade);
+  const start = useAppStore((s) => s.startClosetUpgrade);
+  const pause = useAppStore((s) => s.pauseClosetUpgrade);
+  const cancel = useAppStore((s) => s.cancelClosetUpgrade);
+  const dismiss = useAppStore((s) => s.dismissClosetUpgrade);
+
+  // Demo/mock mode has no backend to hold HF_TOKEN — upgrade is live-only.
+  if (!user || user.isDemo) return null;
+
+  const eligible = garments.filter(
+    (g) => !g.studioRenderUrl && (g.photo || g.studioComposite)
+  ).length;
+
+  const status = upgrade.status;
+  const total = upgrade.total;
+
+  // Idle: invite only when there's something to upgrade.
+  if (status === "idle") {
+    if (eligible === 0 || garments.length === 0) return null;
+    return (
+      <div className="card mt-4 flex items-center justify-between gap-3 rounded-[20px] px-4 py-3.5">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 text-[13px] font-extrabold">
+            <Wand2 className="h-4 w-4 text-acc" /> {eligible} item{eligible > 1 ? "s" : ""} can get the studio finish
+          </p>
+          <p className="mt-0.5 text-[11px] font-medium leading-snug text-mut">
+            Runs in the background · ~1/min · max 4/day · keep using the app
+          </p>
+        </div>
+        <button
+          onClick={start}
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-acc px-4 py-2 text-[12.5px] font-extrabold text-accink transition active:scale-95"
+        >
+          <Wand2 className="h-4 w-4" /> Upgrade my closet
+        </button>
+      </div>
+    );
+  }
+
+  // Done: confirm + dismiss (derived count guards against deletions).
+  if (status === "done") {
+    return (
+      <div className="card mt-4 flex items-center justify-between gap-3 rounded-[20px] px-4 py-3.5">
+        <p className="flex items-center gap-1.5 text-[13px] font-extrabold">
+          <Check className="h-4 w-4 text-acc" /> Closet upgraded
+          {total > 0 && <span className="text-mut">· {total} items</span>}
+        </p>
+        <button
+          onClick={dismiss}
+          className="flex shrink-0 items-center gap-1 rounded-full border border-line px-3 py-1.5 text-[11.5px] font-extrabold text-mut transition active:scale-95"
+          aria-label="Dismiss upgrade complete"
+        >
+          <X className="h-3.5 w-3.5" /> Dismiss
+        </button>
+      </div>
+    );
+  }
+
+  // Running / paused / quota-paused: live progress from the snapshot set.
+  const byId = new Map(garments.map((g) => [g.id, g]));
+  const upgraded = upgrade.initialIds.filter((id) => byId.get(id)?.studioRenderUrl).length;
+  const denom = Math.max(1, total);
+  const pct = Math.min(100, Math.round((upgraded / denom) * 100));
+
+  return (
+    <div className="card mt-4 space-y-2.5 rounded-[20px] px-4 py-3.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex min-w-0 items-center gap-1.5 text-[13px] font-extrabold">
+          {status === "running" ? (
+            <Loader2 className="h-4 w-4 animate-spin text-acc" />
+          ) : (
+            <Wand2 className="h-4 w-4 text-acc" />
+          )}
+          <span className="truncate">
+            {upgraded} of {total} upgraded
+            {status === "paused" && " · paused"}
+            {status === "quota-paused" && " · daily budget reached"}
+          </span>
+        </p>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {status === "running" ? (
+            <button
+              onClick={pause}
+              className="rounded-full border border-line px-3 py-1.5 text-[11.5px] font-extrabold text-mut transition active:scale-95"
+            >
+              Pause
+            </button>
+          ) : (
+            <button
+              onClick={start}
+              className="flex items-center gap-1 rounded-full bg-acc px-3 py-1.5 text-[11.5px] font-extrabold text-accink transition active:scale-95"
+            >
+              <Wand2 className="h-3.5 w-3.5" /> Resume
+            </button>
+          )}
+          <button
+            onClick={cancel}
+            className="rounded-full border border-line px-2.5 py-1.5 text-[11.5px] font-extrabold text-mut transition active:scale-95"
+            aria-label="Stop closet upgrade"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-bgdeep">
+        <motion.div
+          className="h-full bg-acc"
+          initial={false}
+          animate={{ width: `${pct}%` }}
+          transition={{ ease: "easeOut", duration: 0.4 }}
+        />
+      </div>
+      <p className="text-[11px] font-medium leading-snug text-mut">
+        {status === "quota-paused"
+          ? "Free studio budget used for today — resume tomorrow to continue where you left off."
+          : status === "paused"
+            ? "Paused — your progress is saved. Nothing runs until you resume."
+            : "Upgrading in the background — keep using the app normally."}
+      </p>
+    </div>
+  );
+}
+
 /* ------------------------------- screen ------------------------------- */
 
 export default function Closet() {
@@ -787,6 +926,7 @@ export default function Closet() {
         </motion.div>
       ) : (
         <>
+          <UpgradeBanner />
           <div className="relative mt-4">
             <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-mut" />
             <input

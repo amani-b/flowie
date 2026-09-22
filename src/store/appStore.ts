@@ -50,6 +50,37 @@ interface WeatherState {
 
 type SyncStatus = "synced" | "pending" | "error";
 
+/** Phase 5 rollout — explicit opt-in closet upgrade (never automatic). */
+export type ClosetUpgradeStatus =
+  | "idle"
+  | "running"
+  | "paused"
+  | "quota-paused"
+  | "done";
+
+export interface ClosetUpgradeState {
+  status: ClosetUpgradeStatus;
+  /** Eligible ids snapshotted at start (garments lacking studioRenderUrl). */
+  initialIds: string[];
+  /** Remaining ids not yet kicked (popped one per pace interval). */
+  queued: string[];
+  /** Last kicked id (job continues in the serial chains after kick). */
+  currentId: string | null;
+  total: number;
+  startedAt: number | null;
+  completedAt: number | null;
+}
+
+export const IDLE_UPGRADE: ClosetUpgradeState = {
+  status: "idle",
+  initialIds: [],
+  queued: [],
+  currentId: null,
+  total: 0,
+  startedAt: null,
+  completedAt: null,
+};
+
 interface SyncState {
   pendingGarments: Set<string>;
   pendingLooks: Set<string>;
@@ -127,6 +158,14 @@ export interface AppStore {
   removeGarment: (id: string) => void;
   restoreSamples: () => void;
   clearAllData: () => void;
+
+  /* --------------------- Phase 5 closet upgrade ---------------------- */
+  /** Explicit opt-in rollout for pre-Phase-4 garments (never automatic). */
+  closetUpgrade: ClosetUpgradeState;
+  startClosetUpgrade: () => void;
+  pauseClosetUpgrade: () => void;
+  cancelClosetUpgrade: () => void;
+  dismissClosetUpgrade: () => void;
 
   refreshWeather: () => Promise<void>;
   generateToday: (occasion?: Occasion) => Promise<void>;
@@ -441,6 +480,144 @@ function runStudioEnhanceJob(id: string): void {
   });
 }
 
+/* ------------------- Phase 5 closet-upgrade orchestrator -------------- */
+// Explicit opt-in rollout for pre-Phase-4 garments (never automatic —
+// auto-running would burst the ~5/day free ZeroGPU quota by surprise).
+// One kick per STUDIO_UPGRADE_PACE_MS via setTimeout (fully non-blocking:
+// the UI thread is free between ticks and the user keeps using the app).
+// Each kick reuses the exact Phase 1→4 pipeline: composite first when
+// missing (which chains the enhance on completion), else enhance direct.
+// Daily budget leaves headroom for fresh imports; hitting it parks the
+// run in "quota-paused" for the user to resume tomorrow.
+let upgradeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearUpgradeTimer(): void {
+  if (upgradeTimer) {
+    clearTimeout(upgradeTimer);
+    upgradeTimer = null;
+  }
+}
+
+/** Garments that can still be upgraded (have an image source, no final). */
+function eligibleUpgradeIds(garments: Garment[]): string[] {
+  return garments
+    .filter((g) => !g.studioRenderUrl && (g.photo || g.studioComposite))
+    .map((g) => g.id);
+}
+
+function pumpClosetUpgrade(): void {
+  clearUpgradeTimer();
+  const state = useAppStore.getState();
+  const up = state.closetUpgrade;
+  if (up.status !== "running") return;
+  const user = state.user;
+  if (!user || user.isDemo) {
+    // No backend to hold HF_TOKEN — park, don't burn, don't fail.
+    useAppStore.setState((s) => ({
+      closetUpgrade: { ...s.closetUpgrade, status: "paused" as const, currentId: null },
+    }));
+    state.notify("Sign in to upgrade your closet", "err");
+    return;
+  }
+  // Drop ids that no longer need work (upgraded elsewhere, deleted, or
+  // source-less manual entries) — progress derives from initialIds so
+  // skipping never mis-counts.
+  const byId = new Map(state.garments.map((g) => [g.id, g]));
+  const remaining = up.queued.filter((id) => {
+    const g = byId.get(id);
+    return !!g && !g.studioRenderUrl && !!(g.photo || g.studioComposite);
+  });
+  if (remaining.length === 0) {
+    useAppStore.setState((s) => ({
+      closetUpgrade: {
+        ...s.closetUpgrade,
+        queued: [],
+        currentId: null,
+        status: "done" as const,
+        completedAt: Date.now(),
+      },
+    }));
+    state.notify("Closet upgrade complete");
+    return;
+  }
+  // Daily quota guard (local sanity counter; server quota is authoritative).
+  // Pause — don't fail — so the user resumes tomorrow with one tap.
+  // Paced via dynamic import so the enhance chunk stays out of the boot
+  // bundle; the tick itself is just a setTimeout (non-blocking).
+  import("../services/studioEnhance").then(
+    ({ getEnhanceDailyCount, STUDIO_UPGRADE_DAILY_BUDGET, STUDIO_UPGRADE_PACE_MS }) => {
+      const live = useAppStore.getState();
+      if (live.closetUpgrade.status !== "running") return;
+      if (getEnhanceDailyCount() >= STUDIO_UPGRADE_DAILY_BUDGET) {
+        useAppStore.setState((s) => ({
+          closetUpgrade: { ...s.closetUpgrade, status: "quota-paused" as const, currentId: null },
+        }));
+        live.notify("Daily studio budget reached — resume tomorrow", "err");
+        return;
+      }
+      const fresh = useAppStore.getState();
+      const fbyId = new Map(fresh.garments.map((g) => [g.id, g]));
+      const still = fresh.closetUpgrade.queued.filter((id) => {
+        const g = fbyId.get(id);
+        return !!g && !g.studioRenderUrl && !!(g.photo || g.studioComposite);
+      });
+      if (still.length === 0) {
+        useAppStore.setState((s) => ({
+          closetUpgrade: {
+            ...s.closetUpgrade,
+            queued: [],
+            currentId: null,
+            status: "done" as const,
+            completedAt: Date.now(),
+          },
+        }));
+        fresh.notify("Closet upgrade complete");
+        return;
+      }
+      const nextId = still[0];
+      const target = fbyId.get(nextId)!;
+      // Kick the same pipeline as a fresh upload: composite-first when
+      // missing (chains enhance on completion), enhance-direct otherwise.
+      // Mark pending so tiles show progress; failures land "failed" with
+      // the SVG fallback intact and never block the queue.
+      if (!target.studioComposite && target.photo) {
+        useAppStore.setState((s) => ({
+          garments: s.garments.map((g) =>
+            g.id === nextId
+              ? { ...g, studioCompositeStatus: "pending" as const, studioRenderStatus: "pending" as const }
+              : g
+          ),
+          closetUpgrade: {
+            ...s.closetUpgrade,
+            queued: still.slice(1),
+            currentId: nextId,
+          },
+        }));
+        runStudioCompositeJob(nextId);
+      } else {
+        useAppStore.setState((s) => ({
+          garments: s.garments.map((g) =>
+            g.id === nextId ? { ...g, studioRenderStatus: "pending" as const } : g
+          ),
+          closetUpgrade: {
+            ...s.closetUpgrade,
+            queued: still.slice(1),
+            currentId: nextId,
+          },
+        }));
+        runStudioEnhanceJob(nextId);
+      }
+      // Pace the next kick — non-blocking; the app stays fully usable.
+      upgradeTimer = setTimeout(pumpClosetUpgrade, STUDIO_UPGRADE_PACE_MS);
+    }
+  ).catch(() => {
+    // Dynamic import failed (offline?): retry this item on the next resume.
+    useAppStore.setState((s) => ({
+      closetUpgrade: { ...s.closetUpgrade, status: "paused" as const, currentId: null },
+    }));
+  });
+}
+
 export const useAppStore = create<AppStore>()(
   persist(
     (set, get) => ({
@@ -520,6 +697,19 @@ export const useAppStore = create<AppStore>()(
         // Phase 4 enhance jobs resume the same way — but ONLY "pending"
         // (a "failed" enhance waits for manual retry so a reload storm can
         // never burst the ~5/day free quota).
+        // Phase 5 upgrade runs never auto-resume: a "running" snapshot from
+        // before the reload parks as "paused" so quota can't burn without
+        // an explicit tap. Individually-pending garments above still resume.
+        try {
+          const up = get().closetUpgrade;
+          if (up && up.status === "running") {
+            set({
+              closetUpgrade: { ...up, status: "paused" as const, currentId: null },
+            });
+          }
+        } catch {
+          /* upgrade park is best-effort */
+        }
         try {
           for (const g of get().garments) {
             if (
@@ -572,6 +762,9 @@ export const useAppStore = create<AppStore>()(
             errorGarments: new Set<string>(),
             errorLooks: new Set<string>(),
           };
+          // Upgrade queues belong to the previous account too — never leak
+          // one account's rollout into another's closet.
+          patch.closetUpgrade = { ...IDLE_UPGRADE };
         }
         set(patch);
         if (!user.isDemo && state.ownerId !== user.id) {
@@ -646,6 +839,7 @@ export const useAppStore = create<AppStore>()(
       },
 
       signOutUser: async () => {
+        clearUpgradeTimer();
         await authSignOut();
         set({
           user: null,
@@ -656,6 +850,7 @@ export const useAppStore = create<AppStore>()(
           tab: "home",
           stylePrefs: null,
           ...EMPTY_DATA,
+          closetUpgrade: { ...IDLE_UPGRADE },
           _syncState: {
             pendingGarments: new Set<string>(),
             pendingLooks: new Set<string>(),
@@ -696,6 +891,7 @@ export const useAppStore = create<AppStore>()(
         errorGarments: new Set<string>(),
         errorLooks: new Set<string>(),
       },
+      closetUpgrade: { ...IDLE_UPGRADE },
 
       setTheme: (t) => {
         applyThemeToDom(t);
@@ -863,12 +1059,102 @@ export const useAppStore = create<AppStore>()(
         }));
         runStudioEnhanceJob(id);
       },
+      /* ---------------- Phase 5 closet upgrade (opt-in) --------------- */
+      startClosetUpgrade: () => {
+        // Explicit opt-in only — never auto-started (quota surprise guard).
+        // Snapshots the eligible set, kicks the first item immediately for
+        // responsiveness, then paces the rest. Fully cancellable/resumable;
+        // the user keeps using the app between ticks.
+        const s = get();
+        const user = s.user;
+        if (!user || user.isDemo) {
+          s.notify("Sign in to upgrade your closet", "err");
+          return;
+        }
+        // Resume a paused run (keeps original total for stable progress).
+        if (
+          (s.closetUpgrade.status === "paused" ||
+            s.closetUpgrade.status === "quota-paused") &&
+          s.closetUpgrade.initialIds.length > 0
+        ) {
+          const still = s.closetUpgrade.queued.filter((id) =>
+            s.garments.some(
+              (g) => g.id === id && !g.studioRenderUrl && (g.photo || g.studioComposite)
+            )
+          );
+          // Re-top-up with garments added while paused (never duplicates).
+          const known = new Set([
+            ...s.closetUpgrade.initialIds,
+            ...still,
+          ]);
+          const fresh = eligibleUpgradeIds(s.garments).filter((id) => !known.has(id));
+          const initialIds = [...s.closetUpgrade.initialIds, ...fresh];
+          set({
+            closetUpgrade: {
+              ...s.closetUpgrade,
+              initialIds,
+              queued: [...still, ...fresh],
+              total: initialIds.length,
+              status: "running" as const,
+              currentId: null,
+              completedAt: null,
+            },
+          });
+          pumpClosetUpgrade();
+          return;
+        }
+        if (s.closetUpgrade.status === "running") return;
+        const ids = eligibleUpgradeIds(s.garments);
+        if (ids.length === 0) {
+          s.notify("Everything already has the studio finish");
+          return;
+        }
+        set({
+          closetUpgrade: {
+            status: "running" as const,
+            initialIds: ids,
+            queued: ids,
+            currentId: null,
+            total: ids.length,
+            startedAt: Date.now(),
+            completedAt: null,
+          },
+        });
+        s.notify(`Upgrading ${ids.length} item${ids.length > 1 ? "s" : ""} in the background`);
+        pumpClosetUpgrade();
+      },
+      pauseClosetUpgrade: () => {
+        clearUpgradeTimer();
+        const s = get();
+        if (s.closetUpgrade.status !== "running") return;
+        set({
+          closetUpgrade: { ...s.closetUpgrade, status: "paused" as const, currentId: null },
+        });
+      },
+      cancelClosetUpgrade: () => {
+        clearUpgradeTimer();
+        set({ closetUpgrade: { ...IDLE_UPGRADE } });
+      },
+      dismissClosetUpgrade: () => {
+        clearUpgradeTimer();
+        set({ closetUpgrade: { ...IDLE_UPGRADE } });
+      },
       removeGarment: (id) => {
         const user = get().user;
         // Get userId for storage cleanup before removing from state
         const userId = user?.id;
         set((s) => ({
           garments: s.garments.filter((g) => g.id !== id),
+          closetUpgrade:
+            s.closetUpgrade.initialIds.includes(id) || s.closetUpgrade.queued.includes(id)
+              ? {
+                  ...s.closetUpgrade,
+                  initialIds: s.closetUpgrade.initialIds.filter((x) => x !== id),
+                  queued: s.closetUpgrade.queued.filter((x) => x !== id),
+                  total: Math.max(0, s.closetUpgrade.total - 1),
+                  currentId: s.closetUpgrade.currentId === id ? null : s.closetUpgrade.currentId,
+                }
+              : s.closetUpgrade,
           _syncState: {
             ...s._syncState,
             pendingGarments: without(toSet(s._syncState.pendingGarments), id),
@@ -889,7 +1175,8 @@ export const useAppStore = create<AppStore>()(
         get().notify("Sample closet loaded");
       },
       clearAllData: () => {
-        set({ garments: [], looks: [], today: null, generation: IDLE_GEN, stylePrefs: null });
+        clearUpgradeTimer();
+        set({ garments: [], looks: [], today: null, generation: IDLE_GEN, stylePrefs: null, closetUpgrade: { ...IDLE_UPGRADE } });
         get().notify("Local data erased");
       },
 
@@ -1209,7 +1496,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: "fitflow-store",
-      version: 8,
+      version: 9,
       storage: safeStorage,
       // Rehydrated _syncState arrives as string[] (see partialize); restore
       // Sets so every selector/mutator can treat them uniformly.
@@ -1405,6 +1692,37 @@ export const useAppStore = create<AppStore>()(
               : (state as any).today,
           } as never;
         }
+        // v8 → v9 (Phase 5): closet-upgrade queue is explicit opt-in state.
+        // Old snapshots predate it — initialise idle. A "running" snapshot
+        // (reload mid-run) parks as "paused" so quota can't burn without a
+        // fresh tap; queued ids are re-validated against live garments.
+        if (version < 9) {
+          const prev = (state as any).closetUpgrade as
+            | ClosetUpgradeState
+            | undefined;
+          const garmentIds = new Set(
+            (((state as any).garments ?? []) as Array<{ id: string }>).map((g) => g.id)
+          );
+          if (!prev || typeof prev !== "object") {
+            return { ...state, closetUpgrade: { ...IDLE_UPGRADE } } as never;
+          }
+          const queued = (prev.queued ?? []).filter((id: string) => garmentIds.has(id));
+          const initialIds = (prev.initialIds ?? []).filter((id: string) =>
+            garmentIds.has(id)
+          );
+          return {
+            ...state,
+            closetUpgrade: {
+              ...IDLE_UPGRADE,
+              initialIds,
+              queued,
+              total: prev.total ?? initialIds.length,
+              startedAt: prev.startedAt ?? null,
+              status:
+                prev.status === "running" ? ("paused" as const) : (prev.status ?? "idle"),
+            },
+          } as never;
+        }
         return state as never;
       },
       partialize: (s) => ({
@@ -1457,6 +1775,12 @@ export const useAppStore = create<AppStore>()(
           errorGarments: Array.from(toSet(s._syncState.errorGarments)),
           errorLooks: Array.from(toSet(s._syncState.errorLooks)),
         },
+        // Phase 5 upgrade queue (small id arrays — safe for localStorage).
+        // Persisted so progress survives a reload; a "running" snapshot is
+        // parked as "paused" on rehydrate + boot (explicit resume only).
+        closetUpgrade: s.closetUpgrade.status === "running"
+          ? { ...s.closetUpgrade, status: "paused" as const, currentId: null }
+          : s.closetUpgrade,
       }),
     }
   )
