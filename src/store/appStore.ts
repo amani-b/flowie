@@ -19,7 +19,7 @@ import type {
   Units,
   WeatherNow,
 } from "../types";
-import { DEMO_OUTFITS, DEMO_WARDROBE } from "../lib/mock";
+import { DEMO_OUTFITS, getDemoWardrobe } from "../lib/mock";
 import { fetchWeather } from "../services/weather";
 import { generateStyle } from "../services/stylist";
 import { ensureRendering } from "../services/studioRender";
@@ -40,7 +40,7 @@ import {
   insertOutfitRow,
   upsertScheduleRow,
 } from "../services/dataService";
-import { OCCASION_META, uid } from "../lib/utils";
+import { OCCASION_META, uid, withTimeout } from "../lib/utils";
 import { supabase } from "../services/supabaseClient";
 import {
   clearBlobs,
@@ -748,17 +748,27 @@ export const useAppStore = create<AppStore>()(
           set({ authStatus: "signedOut" });
         }
         // Live mode: follow token refresh / OAuth redirect / remote sign-out.
-        unsubAuth?.();
-        unsubAuth = subscribeAuth((u) => {
-          if (u) {
-            get().completeAuth(u);
-            return;
-          }
-          const current = get().user;
-          if (current && !current.isDemo) {
-            set({ user: null, ownerId: null, authStatus: "signedOut", ...EMPTY_DATA });
-          }
-        });
+        // Guarded: if subscribing throws, the app must still leave "booting"
+        // (an eternal Splash looks exactly like a blank screen) and a later
+        // remount must be allowed to retry.
+        try {
+          unsubAuth?.();
+          unsubAuth = subscribeAuth((u) => {
+            if (u) {
+              get().completeAuth(u);
+              return;
+            }
+            const current = get().user;
+            if (current && !current.isDemo) {
+              clearUpgradeTimer();
+              set({ user: null, ownerId: null, authStatus: "signedOut", ...EMPTY_DATA, closetUpgrade: { ...IDLE_UPGRADE } });
+            }
+          });
+        } catch {
+          // Auth subscription failed (offline tracker, blocked SDK): the
+          // closet still works on-device — never strand boot on "booting".
+          if (get().authStatus === "booting") set({ authStatus: "signedOut" });
+        }
         
         // Silent background sweep for any pending/error items. Never toasts:
         // the closet works fully on-device and cloud sync is best-effort.
@@ -849,7 +859,7 @@ export const useAppStore = create<AppStore>()(
 
         if (user.isDemo) {
           // The demo user arrives pre-dressed: seed the mock dataset once.
-          if (state.garments.length === 0) patch.garments = DEMO_WARDROBE;
+          if (state.garments.length === 0) patch.garments = getDemoWardrobe();
           if (state.looks.length === 0) patch.looks = DEMO_OUTFITS;
           patch.ownerId = user.id;
           patch.onboardedUsers = Array.from(
@@ -1118,8 +1128,15 @@ export const useAppStore = create<AppStore>()(
         }
 
         // Live mode: attempt cloud sync (silent on failure — stays on-device).
+        // Bounded: Supabase-JS has no default timeout, so a hung upload
+        // used to strand the record in "pending" forever. Timing out lands
+        // it on "error" where the silent retry sweep picks it up later.
         try {
-          await insertGarmentRow(user.id, normalizedGarment);
+          await withTimeout(
+            insertGarmentRow(user.id, normalizedGarment),
+            30_000,
+            "Cloud save"
+          );
           set((s) => ({
             garments: s.garments.map(garment =>
               garment.id === id ? { ...garment, syncStatus: "synced" as const } : garment
@@ -1317,7 +1334,7 @@ export const useAppStore = create<AppStore>()(
         const have = new Set(get().garments.map((g) => g.id));
         const merged = [
           ...get().garments,
-          ...DEMO_WARDROBE.filter((g) => !have.has(g.id)),
+          ...getDemoWardrobe().filter((g) => !have.has(g.id)),
         ];
         set({ garments: merged });
         get().notify("Sample closet loaded");
@@ -1658,9 +1675,54 @@ export const useAppStore = create<AppStore>()(
         const p = (persisted ?? {}) as unknown as Record<string, unknown>;
         const c = (current ?? {}) as unknown as Record<string, unknown>;
         const sync = (p._syncState ?? {}) as Record<string, unknown>;
+        // Validate shapes before spreading: a corrupt snapshot (bad tab,
+        // non-array garments, trashed queues) used to throw at render time
+        // and erase the whole app via the top boundary. Anything invalid
+        // falls back to the fresh-install default for that slice.
+        const VALID_TABS = ["home", "closet", "studio", "looks", "calendar"];
+        const tab =
+          typeof p.tab === "string" && VALID_TABS.includes(p.tab)
+            ? p.tab
+            : c.tab;
+        const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+        const garments = asArray(p.garments).filter(
+          (g): g is Record<string, unknown> =>
+            !!g && typeof g === "object" && typeof (g as { id?: unknown }).id === "string"
+        );
+        const validGarmentIds = new Set(
+          garments.map((g) => (g as { id: string }).id)
+        );
+        const upgradeRaw = (p.closetUpgrade ?? {}) as Record<string, unknown>;
+        const upgradeQueued = asArray(upgradeRaw.queued).filter(
+          (id): id is string => typeof id === "string" && validGarmentIds.has(id)
+        );
+        const upgradeInitial = asArray(upgradeRaw.initialIds).filter(
+          (id): id is string => typeof id === "string" && validGarmentIds.has(id)
+        );
         return {
           ...(c as object),
           ...(p as object),
+          tab,
+          garments,
+          looks: asArray(p.looks),
+          schedules: asArray(p.schedules),
+          onboardedUsers: asArray(p.onboardedUsers),
+          closetUpgrade: {
+            ...IDLE_UPGRADE,
+            ...(typeof upgradeRaw === "object" ? upgradeRaw : {}),
+            initialIds: upgradeInitial,
+            queued: upgradeQueued,
+            // Never rehydrate mid-run: quota must not burn without a tap.
+            // A paused/quota-paused/done run survives (resumable); a
+            // "running" snapshot parks as paused.
+            status:
+              upgradeRaw.status === "paused" ||
+              upgradeRaw.status === "quota-paused" ||
+              upgradeRaw.status === "done"
+                ? upgradeRaw.status
+                : ("idle" as const),
+            currentId: null,
+          },
           _syncState: {
             pendingGarments: toSet(sync.pendingGarments),
             pendingLooks: toSet(sync.pendingLooks),
@@ -1671,18 +1733,21 @@ export const useAppStore = create<AppStore>()(
       },
       migrate: (persisted, version) => {
         // v1 (Phase 0) → v2: keep user data, add new session fields.
-        const state = (persisted ?? {}) as Record<string, unknown>;
+        // Falls through (no early return): a v1 snapshot must still pass
+        // through every later migration or records arrive missing fields
+        // (e.g. `colors`) that render-time code used to throw on.
+        let state = (persisted ?? {}) as Record<string, unknown>;
         if (version < 2) {
-          return {
+          state = {
             ...state,
             ownerId: null,
             onboardedUsers: [],
             stylePrefs: null,
-          } as never;
+          };
         }
         // v2 → v3: backfill colors/pattern fields on garments for backward compatibility
         if (version < 3) {
-          const newState = {
+          state = {
             ...state,
             garments: ((state as any).garments ?? []).map((g: any) => ({
               ...g,
@@ -1701,11 +1766,10 @@ export const useAppStore = create<AppStore>()(
               },
             })),
           };
-          return newState as never;
         }
         // v3 → v4: add schedules array and tags field to looks
         if (version < 4) {
-          const newState = {
+          state = {
             ...state,
             schedules: [] as Schedule[],
             looks: ((state as any).looks ?? []).map((look: any) => ({
@@ -1713,7 +1777,6 @@ export const useAppStore = create<AppStore>()(
               tags: look.tags ?? [],
             })),
           };
-          return newState as never;
         }
         // v4 → v5: scrub sync queues — drop non-uuid legacy ids and ids for
         // items that no longer exist; mark everything else synced on-device.
@@ -1733,7 +1796,7 @@ export const useAppStore = create<AppStore>()(
             lIds
           );
           const queued = new Set([...cleanGarments, ...cleanLooks]);
-          return {
+          state = {
             ...state,
             garments: garments.map((g: any) => ({
               ...g,
@@ -1749,7 +1812,7 @@ export const useAppStore = create<AppStore>()(
               errorGarments: [],
               errorLooks: [],
             },
-          } as never;
+          };
         }
         // v5 → v6: generate-and-cache studio renderings on every garment,
         // including snapshot copies inside saved looks and today's outfit.
@@ -1770,7 +1833,7 @@ export const useAppStore = create<AppStore>()(
             }
             return next;
           };
-          return {
+          state = {
             ...state,
             garments: ((state as any).garments ?? []).map(fixG),
             looks: ((state as any).looks ?? []).map((l: any) => ({
@@ -1780,7 +1843,7 @@ export const useAppStore = create<AppStore>()(
             today: (state as any).today
               ? { ...(state as any).today, outfit: fixOutfit((state as any).today.outfit) }
               : (state as any).today,
-          } as never;
+          };
         }
         // v6 → v7: studio-composite is garment-local only. Strip composites
         // cached inside look/today snapshots (quota hygiene + a persisted
@@ -1801,7 +1864,7 @@ export const useAppStore = create<AppStore>()(
             for (const k of Object.keys(next)) next[k] = stripSnap(next[k]);
             return next;
           };
-          return {
+          state = {
             ...state,
             looks: ((state as any).looks ?? []).map((l: any) => ({
               ...l,
@@ -1810,7 +1873,7 @@ export const useAppStore = create<AppStore>()(
             today: (state as any).today
               ? { ...(state as any).today, outfit: stripOutfit((state as any).today.outfit) }
               : (state as any).today,
-          } as never;
+          };
         }
         // v7 → v8 (Phase 4): studio_render_url is garment-local like the
         // composite — a persisted "pending" inside snapshots could never
@@ -1835,7 +1898,7 @@ export const useAppStore = create<AppStore>()(
             for (const k of Object.keys(next)) next[k] = stripSnap(next[k]);
             return next;
           };
-          return {
+          state = {
             ...state,
             looks: ((state as any).looks ?? []).map((l: any) => ({
               ...l,
@@ -1844,7 +1907,7 @@ export const useAppStore = create<AppStore>()(
             today: (state as any).today
               ? { ...(state as any).today, outfit: stripOutfit((state as any).today.outfit) }
               : (state as any).today,
-          } as never;
+          };
         }
         // v8 → v9 (Phase 5): closet-upgrade queue is explicit opt-in state.
         // Old snapshots predate it — initialise idle. A "running" snapshot
@@ -1858,24 +1921,25 @@ export const useAppStore = create<AppStore>()(
             (((state as any).garments ?? []) as Array<{ id: string }>).map((g) => g.id)
           );
           if (!prev || typeof prev !== "object") {
-            return { ...state, closetUpgrade: { ...IDLE_UPGRADE } } as never;
+            state = { ...state, closetUpgrade: { ...IDLE_UPGRADE } };
+          } else {
+            const queued = (prev.queued ?? []).filter((id: string) => garmentIds.has(id));
+            const initialIds = (prev.initialIds ?? []).filter((id: string) =>
+              garmentIds.has(id)
+            );
+            state = {
+              ...state,
+              closetUpgrade: {
+                ...IDLE_UPGRADE,
+                initialIds,
+                queued,
+                total: prev.total ?? initialIds.length,
+                startedAt: prev.startedAt ?? null,
+                status:
+                  prev.status === "running" ? ("paused" as const) : (prev.status ?? "idle"),
+              },
+            };
           }
-          const queued = (prev.queued ?? []).filter((id: string) => garmentIds.has(id));
-          const initialIds = (prev.initialIds ?? []).filter((id: string) =>
-            garmentIds.has(id)
-          );
-          return {
-            ...state,
-            closetUpgrade: {
-              ...IDLE_UPGRADE,
-              initialIds,
-              queued,
-              total: prev.total ?? initialIds.length,
-              startedAt: prev.startedAt ?? null,
-              status:
-                prev.status === "running" ? ("paused" as const) : (prev.status ?? "idle"),
-            },
-          } as never;
         }
         // v9 → v10 (speed): image blobs moved to IndexedDB — localStorage
         // snapshots no longer carry them. Nothing to transform: in-memory
@@ -1887,12 +1951,11 @@ export const useAppStore = create<AppStore>()(
             | ClosetUpgradeState
             | undefined;
           if (prev && typeof prev === "object" && prev.status === "running") {
-            return {
+            state = {
               ...state,
               closetUpgrade: { ...prev, status: "paused" as const, currentId: null },
-            } as never;
+            };
           }
-          return state as never;
         }
         return state as never;
       },

@@ -1,6 +1,9 @@
 import type { Garment, Category, ColorFamily, Warmth, Formality } from "../types";
-import { hexToRgb } from "../lib/utils";
+import { hexToRgb, withTimeout } from "../lib/utils";
 import { detectPattern, rgbToHex, type PixelSample } from "../lib/patternDetect";
+
+// Re-exported so existing callers keep a single import site.
+export { withTimeout };
 
 /**
  * AI-powered garment tagging service using Gemini (flash tier, free).
@@ -16,6 +19,9 @@ import { detectPattern, rgbToHex, type PixelSample } from "../lib/patternDetect"
 
 /** Gemini flash-tier model for tagging + styling (free tier, vision-capable). */
 export const GEMINI_MODEL = "gemini-3.5-flash";
+
+/** Network ceiling for tagging calls: browser fetch never times out alone. */
+const TAG_TIMEOUT_MS = 25_000;
 
 const GEMINI_KEY = (import.meta.env.VITE_GEMINI_API_KEY ?? "").trim();
 export const geminiReady = GEMINI_KEY.length > 0;
@@ -125,7 +131,14 @@ export async function extractColorsFromImage(imageDataUrl: string): Promise<{
   pattern: TaggingResult["pattern"];
   shares: number[];
 }> {
-  return new Promise((resolve) => {
+  // Resolve-only by design (any decode failure yields the gray fallback),
+  // so race a timeout around it: if neither onload nor onerror ever fires,
+  // reject into the caller's fallback instead of pending forever.
+  const work = new Promise<{
+    colors: string[];
+    pattern: TaggingResult["pattern"];
+    shares: number[];
+  }>((resolve) => {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement("canvas");
@@ -238,6 +251,7 @@ export async function extractColorsFromImage(imageDataUrl: string): Promise<{
     img.onerror = () => resolve({ colors: ["#6B7280"], pattern: "solid", shares: [1] });
     img.src = imageDataUrl;
   });
+  return withTimeout(work, TAG_TIMEOUT_MS, "Color extraction");
 }
 
 function guessWarmth(text: string): Warmth {
@@ -315,6 +329,10 @@ async function viaGemini(imageDataUrl: string): Promise<TaggingResult> {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // AbortSignal.timeout: fetch has no default timeout — a stalled
+      // connection used to hang tagGarmentPhoto (and the upload spinner)
+      // forever instead of falling back to the heuristic path.
+      signal: AbortSignal.timeout(TAG_TIMEOUT_MS),
       body: JSON.stringify({
         contents: [
           {
@@ -413,7 +431,9 @@ export async function tagGarmentPhoto(imageDataUrl: string, fileName: string): P
         clamped.patternMix = pixels.shares;
       } else {
         try {
-          const blob = await fetch(imageDataUrl).then((r) => r.blob());
+          const blob = await fetch(imageDataUrl, {
+            signal: AbortSignal.timeout(TAG_TIMEOUT_MS),
+          }).then((r) => r.blob());
           const heur = await tagGarmentHeuristic(
             new File([blob], fileName, { type: blob.type }),
             imageDataUrl
@@ -430,7 +450,9 @@ export async function tagGarmentPhoto(imageDataUrl: string, fileName: string): P
     }
   }
   // Create a fake File for the heuristic fallback
-  const blob = await fetch(imageDataUrl).then((r) => r.blob());
+  const blob = await fetch(imageDataUrl, {
+    signal: AbortSignal.timeout(TAG_TIMEOUT_MS),
+  }).then((r) => r.blob());
   const file = new File([blob], fileName, { type: blob.type });
   return tagGarmentHeuristic(file, imageDataUrl);
 }

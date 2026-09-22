@@ -462,8 +462,32 @@ export function studioSvg(g: Garment, uid?: string): string {
     `<g>${make(color, id)}${patternOverlay(g, id)}</g></svg>`;
 }
 
+/**
+ * Defensive normalisation: persisted records from older versions (or a
+ * corrupt snapshot) can reach the renderer missing `colors`/`name`/`id`.
+ * A throw here used to happen at render time and erase the whole screen —
+ * so sanitise first, never throw.
+ */
+function safeGarment(g: Garment): Garment {
+  const isHex = (c: unknown): c is string =>
+    typeof c === "string" && /^#[0-9A-F]{6}$/i.test(c);
+  const raw = Array.isArray(g.colors) && g.colors.length > 0 ? g.colors : [];
+  const valid = raw.filter(isHex);
+  const fallback = isHex(g.color) ? g.color : "#6B7280";
+  const colors = valid.length > 0 ? valid : [fallback];
+  return {
+    ...g,
+    id: typeof g.id === "string" && g.id ? g.id : "g-unknown",
+    name: typeof g.name === "string" && g.name ? g.name : "Untitled piece",
+    color: colors[0],
+    colors,
+    pattern: g.pattern ?? "solid",
+  };
+}
+
 function keyFor(g: Garment): string {
-  return [g.id, g.category, g.kind ?? "", g.name, g.color, g.colors.join(","), g.pattern].join("|");
+  const s = safeGarment(g);
+  return [s.id, s.category, s.kind ?? "", s.name, s.color, s.colors.join(","), s.pattern].join("|");
 }
 
 const memo = new Map<string, { key: string; url: string }>();
@@ -474,12 +498,27 @@ const memo = new Map<string, { key: string; url: string }>();
  * re-encoding within a session.
  */
 export function renderingFor(g: Garment): string {
-  const key = keyFor(g);
-  const hit = memo.get(g.id);
+  const s = safeGarment(g);
+  const key = keyFor(s);
+  const hit = memo.get(s.id);
   if (hit && hit.key === key) return hit.url;
-  const url = `data:image/svg+xml,${encodeURIComponent(studioSvg(g))}`;
-  memo.set(g.id, { key, url });
-  return url;
+  // studioSvg is pure string-building and shouldn't throw, but this runs
+  // at render time across every tile — belt and braces so one bad record
+  // can never blank a screen. Worst case: a neutral placeholder tile.
+  try {
+    const url = `data:image/svg+xml,${encodeURIComponent(studioSvg(s))}`;
+    memo.set(s.id, { key, url });
+    return url;
+  } catch {
+    // Static last resort (no garment-derived computation at all).
+    return (
+      "data:image/svg+xml," +
+      encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">` +
+          `<rect width="${W}" height="${H}" fill="#ECE7DD"/></svg>`
+      )
+    );
+  }
 }
 
 /**
@@ -488,9 +527,19 @@ export function renderingFor(g: Garment): string {
  * `rendering`/`renderStatus`, and returns it.
  */
 export function ensureRendering<T extends Garment>(g: T): T {
-  const fresh = renderingFor(g);
-  if (g.rendering === fresh && g.renderStatus === "ready") return g;
-  g.rendering = fresh;
-  g.renderStatus = "ready";
-  return g;
+  try {
+    const fresh = renderingFor(g);
+    if (g.rendering === fresh && g.renderStatus === "ready") return g;
+    g.rendering = fresh;
+    g.renderStatus = "ready";
+    return g;
+  } catch {
+    // Frozen/sealed record (or anything exotic): return it untouched with
+    // at least a valid rendering string rather than throwing into render.
+    try {
+      return { ...g, rendering: renderingFor(g), renderStatus: "ready" as const };
+    } catch {
+      return g;
+    }
+  }
 }

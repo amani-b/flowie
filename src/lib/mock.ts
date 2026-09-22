@@ -37,9 +37,25 @@ export const DEMO_WARDROBE: Garment[] = [
   { id: "g-chelsea", name: "Chelsea Boots", category: "shoes", color: "#5A3B2E", colors: ["#5A3B2E"], pattern: "solid", colorFamily: "earth", warmth: 2, formality: 3, createdAt: at(11) },
 ];
 
-// Studio renderings are generated once here and cached on each record —
-// every screen loads the stored string, nothing ever re-renders per visit.
-for (const item of DEMO_WARDROBE) ensureRendering(item);
+// Studio renderings are generated once and cached on each record — every
+// screen loads the stored string, nothing ever re-renders per visit.
+// Guarded + lazy: a throw at module scope used to abort the import chain
+// (store → App → main) and blank the app before any boundary mounted.
+let demoRenderingsReady = false;
+function ensureDemoRenderings(): void {
+  if (demoRenderingsReady) return;
+  demoRenderingsReady = true;
+  try {
+    for (const item of DEMO_WARDROBE) ensureRendering(item);
+  } catch (e) {
+    console.warn("Demo renderings deferred:", e);
+  }
+}
+
+export function getDemoWardrobe(): Garment[] {
+  ensureDemoRenderings();
+  return DEMO_WARDROBE;
+}
 
 const byId = new Map(DEMO_WARDROBE.map((g) => [g.id, g]));
 const g = (id: string): Garment => byId.get(id)!;
