@@ -118,9 +118,28 @@ async function gradioPredict(imageDataUrl: string, strength: number, steps: numb
   return new Uint8Array(await fileRes.arrayBuffer());
 }
 
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-user-id",
+};
+
+const json = (body: unknown, status: number) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS, "Content-Type": "application/json" },
+  });
+
 serve(async (req) => {
+  // Browser clients (supabase-js invoke) send an OPTIONS preflight first
+  // because of the auth headers. Answer it or the real POST never arrives
+  // (preflight 405 with no CORS headers = blocked at the browser).
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS });
+  }
   if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "POST only" }), { status: 405 });
+    return json({ error: "POST only" }, 405);
   }
   const t0 = Date.now();
   try {
@@ -128,10 +147,10 @@ serve(async (req) => {
     const { garment_id, image_data_url, strength = 0.3, num_steps = 4, seed = 42 } =
       await req.json();
     if (!garment_id || !image_data_url) {
-      return new Response(JSON.stringify({ error: "garment_id + image_data_url required" }), { status: 400 });
+      return json({ error: "garment_id + image_data_url required" }, 400);
     }
     if (!SPACE_ID || !HF_TOKEN || !SB_URL || !SB_SERVICE_KEY) {
-      return new Response(JSON.stringify({ error: "function not configured (secrets missing)" }), { status: 503 });
+      return json({ error: "function not configured (secrets missing)" }, 503);
     }
     const out = await gradioPredict(image_data_url, strength, num_steps, seed);
     const ms = Date.now() - t0;
@@ -149,7 +168,7 @@ serve(async (req) => {
       .single();
     const ownerId = (row as { user_id?: string } | null)?.user_id ?? authUserId;
     if (!ownerId) {
-      return new Response(JSON.stringify({ error: "unknown garment owner" }), { status: 404 });
+      return json({ error: "unknown garment owner" }, 404);
     }
     const path = `${ownerId}/${garment_id}-studio.jpg`;
     const { error: upErr } = await admin.storage
@@ -167,11 +186,9 @@ serve(async (req) => {
       // so the client can display it this session; row sync follows later.
       console.log(`[enhance-garment] row update skipped garment=${garment_id}: ${rowErr.message}`);
     }
-    return new Response(JSON.stringify({ studio_render_url: studioUrl }), {
-      headers: { "Content-Type": "application/json" },
-    });
+    return json({ studio_render_url: studioUrl }, 200);
   } catch (e) {
     console.log(`[enhance-garment] FAILED wall_ms=${Date.now() - t0}: ${String((e as Error)?.message ?? e).slice(0, 500)}`);
-    return new Response(JSON.stringify({ error: String((e as Error)?.message ?? e).slice(0, 500) }), { status: 502 });
+    return json({ error: String((e as Error)?.message ?? e).slice(0, 500) }, 502);
   }
 });
