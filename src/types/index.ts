@@ -62,6 +62,17 @@ export interface Garment {
   /** img2img final build state — independent of SVG + composite states. */
   studioRenderStatus?: "pending" | "ready" | "failed";
   /**
+   * Photo-faithful AI flat-lay (Gemini 3.1 Flash Image, direct REST —
+   * see services/studioFlatlay.ts). JPEG/PNG data URL built on explicit
+   * opt-in or budgeted auto-run; COST-GATED (no free tier on image output)
+   * so the free composite + SVG always carry the default experience.
+   * Display precedence in GarmentPhoto: flatLay > studioRenderUrl >
+   * studioComposite > SVG `rendering` fallback. Local-only, not synced.
+   */
+  studioFlatLay?: string;
+  /** AI flat-lay build state — independent of SVG/composite/enhance states. */
+  studioFlatLayStatus?: "pending" | "ready" | "failed";
+  /**
    * Cached studio rendering (SVG data URL): the single display image for
    * this garment on every screen. Generated once via studioRender and stored
    * on the record — never recomputed per screen visit.
