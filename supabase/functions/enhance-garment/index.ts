@@ -17,8 +17,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
 
 const SPACE_ID = Deno.env.get("HF_SPACE_ID") ?? "";
 const HF_TOKEN = Deno.env.get("HF_TOKEN") ?? "";
-const SB_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const SB_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+// NOTE: `supabase secrets set` rejects names starting with SUPABASE_
+// (reserved), so the project URL + service key live under SB_* names.
+// Fall back to the runtime's built-in SUPABASE_* vars where present.
+const SB_URL =
+  Deno.env.get("SB_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
+const SB_SERVICE_KEY =
+  Deno.env.get("SB_SERVICE_ROLE_KEY") ??
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ??
+  "";
 
 const STUDIO_PROMPT =
   "professional studio product photography of a garment, soft diffused lighting, crisp fabric texture, perfectly legible printed text and logos, accurate small lettering, clean e-commerce catalog shot, photorealistic";
