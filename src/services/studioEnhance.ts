@@ -29,6 +29,17 @@ export const STUDIO_ENHANCE_STRENGTH = 0.3;
 export const STUDIO_ENHANCE_STEPS = 4;
 export const STUDIO_ENHANCE_SEED = 42;
 
+/**
+ * Phase 5 rollout guards (see store closetUpgrade orchestrator).
+ * - PACE: max one enhance *start* per interval, so a 40-item closet can
+ *   never burst the free ZeroGPU quota in one go. The Space call itself
+ *   takes ~20-60 s, so the effective rate is even slower.
+ * - DAILY BUDGET: stop upgrading after this many local calls in one day,
+ *   leaving headroom (~1 slot) for fresh imports. Resumes on next run.
+ */
+export const STUDIO_UPGRADE_PACE_MS = 60_000;
+export const STUDIO_UPGRADE_DAILY_BUDGET = 4;
+
 /** LocalStorage key for the client-side daily call sanity counter. */
 const COUNT_KEY = "fitflow-enhance-calls-v1";
 
@@ -47,6 +58,17 @@ function bumpLocalDailyCounter(): number {
     return next.n;
   } catch {
     return -1;
+  }
+}
+
+/** Read today's local enhance-call count without incrementing (quota UI). */
+export function getEnhanceDailyCount(): number {
+  try {
+    const raw = localStorage.getItem(COUNT_KEY);
+    const parsed = raw ? (JSON.parse(raw) as { day?: string; n?: number }) : {};
+    return parsed.day === todayKey() ? (parsed.n ?? 0) : 0;
+  } catch {
+    return 0;
   }
 }
 
