@@ -204,6 +204,20 @@ export default function App() {
     void boot();
   }, [boot]);
 
+  // Pre-fetch the on-device segmentation model while idle so the first
+  // upload's background removal lands in well under ~2 s. Best-effort and
+  // offline-safe: a missed warm-up just means the first job downloads it.
+  useEffect(() => {
+    const idle =
+      (window as unknown as { requestIdleCallback?: (cb: () => void) => void })
+        .requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 3000));
+    idle(() => {
+      import("./services/studioComposite")
+        .then((m) => m.warmStudioComposite())
+        .catch(() => {});
+    });
+  }, []);
+
   return (
     <BrowserRouter>
       {/* OAuthHashHandler must be outside Routes to run on ALL paths before routing */}

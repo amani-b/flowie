@@ -1,0 +1,167 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><title>bg-remove tool page (options)</title>
+<script type="importmap">
+{ "imports": { "onnxruntime-web": "/node_modules/onnxruntime-web/dist/ort.bundle.min.mjs",
+               "onnxruntime-web/webgpu": "/node_modules/onnxruntime-web/dist/ort.webgpu.bundle.min.mjs" } }
+</script></head>
+<body>
+<script type="module">
+  import { removeBackground } from "/node_modules/@imgly/background-removal/dist/index.mjs";
+
+  async function toB64(u8) {
+    let bin = "";
+    for (let i = 0; i < u8.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    }
+    return btoa(bin);
+  }
+
+  async function loadBitmap(blob) {
+    return await createImageBitmap(blob);
+  }
+
+  /**
+   * Contrast normalisation variants applied to the source BEFORE the model.
+   * The model sees a low-contrast frame in photo_2 (underexposed flash shot);
+   * a global or local stretch may turn a hesitant ghost mask into a decisive
+   * one. All variants are pure pixel maths, no extra downloads.
+   */
+  async function preprocess(bitmap, mode) {
+    const w = bitmap.width;
+    const h = bitmap.height;
+    const c = new OffscreenCanvas(w, h);
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bitmap, 0, 0);
+    if (mode === "none") return c;
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+    const N = w * h;
+
+    const luma = new Uint8ClampedArray(N);
+    for (let i = 0; i < N; i++) {
+      luma[i] = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) | 0;
+    }
+
+    if (mode === "stretch") {
+      // Global 1..99 percentile luminance stretch, gain applied to RGB.
+      const hist = new Uint32Array(256);
+      for (let i = 0; i < N; i++) hist[luma[i]]++;
+      let lo = 0, hi = 255, acc = 0;
+      const lowN = N * 0.01, highN = N * 0.99;
+      for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= lowN) { lo = v; break; } }
+      acc = 0;
+      for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= highN) { hi = v; break; } }
+      const span = Math.max(1, hi - lo);
+      const lut = new Uint8ClampedArray(256);
+      for (let v = 0; v < 256; v++) lut[v] = ((v - lo) * 255) / span;
+      for (let i = 0; i < N * 4; i++) d[i] = lut[d[i]];
+    } else if (mode === "clahe") {
+      // 8x8-tile CLAHE on luma, applied as a per-tile monotone LUT to RGB.
+      const TX = 8, TY = 8;
+      const tw = Math.ceil(w / TX), th = Math.ceil(h / TY);
+      const clip = Math.max(1, Math.round((tw * th * 0.012)));
+      const maps = [];
+      for (let ty = 0; ty < TY; ty++) {
+        for (let tx = 0; tx < TX; tx++) {
+          const hist2 = new Uint32Array(256);
+          let n = 0;
+          const x0 = tx * tw, x1 = Math.min(w, x0 + tw);
+          const y0 = ty * th, y1 = Math.min(h, y0 + th);
+          for (let y = y0; y < y1; y++)
+            for (let x = x0; x < x1; x++) { hist2[luma[y * w + x]]++; n++; }
+          // clip + redistribute
+          let excess = 0;
+          for (let v = 0; v < 256; v++) if (hist2[v] > clip) { excess += hist2[v] - clip; hist2[v] = clip; }
+          const add = excess / 256;
+          const lut = new Uint8ClampedArray(256);
+          let acc2 = 0;
+          for (let v = 0; v < 256; v++) { acc2 += hist2[v] + add; lut[v] = (acc2 * 255) / n; }
+          maps.push(lut);
+        }
+      }
+      for (let y = 0; y < h; y++) {
+        const fy = (y / th) - 0.5;
+        let ty0 = Math.floor(fy), wy = fy - ty0;
+        if (ty0 < 0) { ty0 = 0; wy = 0; }
+        let ty1 = Math.min(TY - 1, ty0 + 1);
+        for (let x = 0; x < w; x++) {
+          const fx = (x / tw) - 0.5;
+          let tx0 = Math.floor(fx), wx = fx - tx0;
+          if (tx0 < 0) { tx0 = 0; wx = 0; }
+          let tx1 = Math.min(TX - 1, tx0 + 1);
+          const i = y * w + x;
+          const v = luma[i];
+          const a = maps[ty0 * TX + tx0][v];
+          const b = maps[ty0 * TX + tx1][v];
+          const cc = maps[ty1 * TX + tx0][v];
+          const dd = maps[ty1 * TX + tx1][v];
+          const out = (a * (1 - wx) + b * wx) * (1 - wy) + (cc * (1 - wx) + dd * wx) * wy;
+          const gain = v > 4 ? out / v : 1;
+          d[i * 4] = d[i * 4] * gain;
+          d[i * 4 + 1] = d[i * 4 + 1] * gain;
+          d[i * 4 + 2] = d[i * 4 + 2] * gain;
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  async function canvasToBlob(c) {
+    return await c.convertToBlob({ type: "image/png" });
+  }
+
+  /**
+   * Runs the real browser pipeline.
+   * opts: { model, device, preprocess, rescale }
+   */
+  async function run(url, opts) {
+    opts = opts || {};
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("fetch " + url + ": " + res.status);
+    const blob = await res.blob();
+
+    let input = blob;
+    if (opts.preprocess && opts.preprocess !== "none") {
+      const bmp = await loadBitmap(blob);
+      const c = await preprocess(bmp, opts.preprocess);
+      input = await canvasToBlob(c);
+    }
+
+    const t0 = performance.now();
+    const cutout = await removeBackground(input, {
+      model: opts.model || "isnet_fp16",
+      device: opts.device || "cpu",
+      rescale: opts.rescale !== false,
+      output: { format: "image/png", quality: 1 },
+    });
+    const ms = Math.round(performance.now() - t0);
+    const buf = new Uint8Array(await cutout.arrayBuffer());
+
+    const bmp = await createImageBitmap(new Blob([buf], { type: "image/png" }));
+    const c2 = new OffscreenCanvas(bmp.width, bmp.height);
+    const ctx2 = c2.getContext("2d", { willReadFrequently: true });
+    ctx2.drawImage(bmp, 0, 0);
+    const rgba = ctx2.getImageData(0, 0, bmp.width, bmp.height).data;
+    const alpha = new Uint8Array(bmp.width * bmp.height);
+    for (let i = 0; i < alpha.length; i++) alpha[i] = rgba[i * 4 + 3];
+
+    return {
+      b64: await toB64(buf),
+      alphaB64: await toB64(alpha),
+      w: bmp.width,
+      h: bmp.height,
+      bytes: buf.length,
+      ms,
+      device: opts.device || "cpu",
+      preprocess: opts.preprocess || "none",
+      model: opts.model || "isnet_fp16",
+    };
+  }
+
+  window.__runBgRemoval = (url, opts) => run(url, opts);
+  window.__toolReady = true;
+</script>
+</body>
+</html>

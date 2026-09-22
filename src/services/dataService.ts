@@ -11,6 +11,13 @@ import type {
   SavedLook,
   Warmth,
 } from "../types";
+import { ensureRendering } from "./studioRender";
+
+// Set false for the session the first time the live DB rejects `render_url`
+// (migration not applied yet) — writes then omit it instead of failing.
+let renderUrlOk = true;
+// Same guard for the Phase 4 `studio_render_url` column.
+let studioRenderUrlOk = true;
 
 /**
  * Cloud sync layer (Supabase). Every call is a no-op when `supabase` is
@@ -92,7 +99,13 @@ function rowToGarment(r: WardrobeRow): Garment {
   const pattern: Garment["pattern"] = validPatterns.includes(r.pattern as any)
     ? (r.pattern as Garment["pattern"])
     : "solid";
-  return {
+  // The cached studio rendering travels with the record when the column
+  // exists (see migration_render_url.sql); otherwise it is re-derived
+  // deterministically from the same fields — never fetched per visit.
+  const stored = (r as { render_url?: string | null }).render_url ?? undefined;
+  const storedStudio =
+    (r as { studio_render_url?: string | null }).studio_render_url ?? undefined;
+  const base: Garment = {
     id: r.id,
     name: r.name,
     category,
@@ -108,6 +121,16 @@ function rowToGarment(r: WardrobeRow): Garment {
     photo: r.image_url ?? undefined,
     createdAt: new Date(r.created_at).getTime(),
   };
+  if (storedStudio) {
+    base.studioRenderUrl = storedStudio;
+    base.studioRenderStatus = "ready";
+  }
+  if (stored) {
+    base.rendering = stored;
+    base.renderStatus = "ready";
+    return base;
+  }
+  return ensureRendering(base);
 }
 
 function garmentToInsert(userId: string, g: Garment): WardrobeInsert {
@@ -116,6 +139,11 @@ function garmentToInsert(userId: string, g: Garment): WardrobeInsert {
     id: g.id, // Always use the same id for storage and DB row
     user_id: userId,
     image_url: g.photo ?? null,
+    // Cached studio rendering lives on the record next to the photo.
+    // Omitted when the live DB predates the render_url migration.
+    ...(renderUrlOk ? { render_url: g.rendering ?? null } : {}),
+    // Phase 4 img2img final — omitted until migration_studio_render_url.sql.
+    ...(studioRenderUrlOk ? { studio_render_url: g.studioRenderUrl ?? null } : {}),
     category: g.category,
     color: g.color,
     colors: g.colors, // New field: array of hex values
@@ -269,14 +297,31 @@ export async function insertGarmentRow(
     }
   }
 
-  const { data, error } = await supabase
+  const payload = {
+    ...garmentToInsert(userId, g),
+    image_url: imageUrl,
+  };
+  let { data, error } = await supabase
     .from("wardrobe_items")
-    .upsert({
-      ...garmentToInsert(userId, g),
-      image_url: imageUrl,
-    }, { onConflict: "id" })
+    .upsert(payload, { onConflict: "id" })
     .select("id")
     .single();
+  if (error && /render_url/.test(error.message) && (renderUrlOk || studioRenderUrlOk)) {
+    // Live DB predates render_url / studio_render_url migrations — retry
+    // without them once and stop sending them for the rest of the session.
+    // Both are re-derivable (SVG on-device / img2img retry), so nothing lost.
+    renderUrlOk = false;
+    studioRenderUrlOk = false;
+    const { render_url: _dropped, studio_render_url: _dropped2, ...legacy } =
+      payload as Record<string, unknown>;
+    void _dropped;
+    void _dropped2;
+    ({ data, error } = await supabase
+      .from("wardrobe_items")
+      .upsert(legacy, { onConflict: "id" })
+      .select("id")
+      .single());
+  }
   if (error) throw new Error(error.message);
   return (data as { id: string } | null)?.id ?? null;
 }
