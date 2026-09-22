@@ -16,7 +16,7 @@ import GarmentCard from "../components/GarmentCard";
 import GarmentPhoto from "../components/GarmentPhoto";
 import Sheet from "../components/Sheet";
 import { LogoMark } from "../components/icons";
-import { tagGarmentPhoto, taggingToGarment, type TaggingResult } from "../services/aiStylistService";
+import { tagGarmentPhoto, taggingToGarment, withTimeout, type TaggingResult } from "../services/aiStylistService";
 
 type Filter = "all" | Category;
 
@@ -46,6 +46,12 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
   const [pending, setPending] = useState<PendingGarment[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(0);
+  // Set on Cancel; workers check it between steps and stop pulling files.
+  const cancelRef = useRef(false);
+
+  const cancelAnalysis = () => {
+    cancelRef.current = true;
+  };
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -63,28 +69,61 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
     if (files.length === 0) return;
     setAnalyzing(true);
     setProgress(0);
+    cancelRef.current = false;
 
+    // Two lanes instead of one serial loop: a single slow file no longer
+    // blocks everything behind it, and each file is isolated — a hang or
+    // failure skips that file with a notice instead of jamming the queue.
+    // try/finally guarantees the spinner releases no matter what.
+    const queue = [...files];
     const results: PendingGarment[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      try {
-        const dataUrl = await compressImage(file);
-        const tags = await tagGarmentPhoto(dataUrl, file.name);
-        results.push({
-          ...tags,
-          tempId: uid("p"),
-          imageDataUrl: dataUrl,
-          fileName: file.name,
-        });
-        setProgress(Math.round(((i + 1) / files.length) * 100));
-      } catch (e) {
-        notify(`Failed to analyze ${file.name}`, "err");
+    let done = 0;
+    try {
+      const lanes = [0, 1].map(async () => {
+        while (queue.length > 0) {
+          if (cancelRef.current) return;
+          const file = queue.shift()!;
+          try {
+            const dataUrl = await withTimeout(
+              compressImage(file),
+              35_000,
+              `Reading ${file.name}`
+            );
+            if (cancelRef.current) return;
+            const tags = await withTimeout(
+              tagGarmentPhoto(dataUrl, file.name),
+              60_000,
+              `Analyzing ${file.name}`
+            );
+            results.push({
+              ...tags,
+              tempId: uid("p"),
+              imageDataUrl: dataUrl,
+              fileName: file.name,
+            });
+          } catch (e) {
+            notify(
+              `Skipped ${file.name} — ${e instanceof Error ? e.message : "could not analyze"}`,
+              "err"
+            );
+          } finally {
+            done++;
+            setProgress(Math.round((done / files.length) * 100));
+          }
+        }
+      });
+      await Promise.all(lanes);
+      // Completion order is nondeterministic across lanes — restore a
+      // stable review list so items don't shuffle between runs.
+      results.sort((a, b) => a.fileName.localeCompare(b.fileName));
+      if (cancelRef.current) {
+        notify("Analysis stopped");
       }
+      setPending(results);
+    } finally {
+      setAnalyzing(false);
+      setFiles([]);
     }
-
-    setPending(results);
-    setAnalyzing(false);
-    setFiles([]);
   };
 
   const updatePending = (tempId: string, updates: Partial<PendingGarment>) => {
@@ -348,17 +387,25 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
               transition={{ ease: "easeOut" }}
             />
           </div>
-          <p className="text-[11px] text-mut">Reading colors, pattern and fit…</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] text-mut">Reading colors, pattern and fit…</p>
+            <button
+              onClick={cancelAnalysis}
+              className="shrink-0 rounded-full border border-line px-3 py-1.5 text-[11px] font-extrabold text-mut transition active:scale-95"
+            >
+              Stop
+            </button>
+          </div>
         </div>
       )}
 
       <div className="flex gap-2 pt-2">
         <button
-          onClick={onCancel}
-          disabled={analyzing || files.length === 0}
+          onClick={analyzing ? cancelAnalysis : onCancel}
+          disabled={!analyzing && files.length === 0}
           className="flex-1 rounded-[16px] border border-line py-3 text-[13.5px] font-extrabold text-mut transition active:scale-[0.98] disabled:opacity-50"
         >
-          Cancel
+          {analyzing ? "Stop analysis" : "Cancel"}
         </button>
         <button
           onClick={analyzeFiles}

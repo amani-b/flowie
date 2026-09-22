@@ -3,6 +3,7 @@ import { Loader2, RefreshCw } from "lucide-react";
 import { cn } from "../lib/utils";
 import { renderingFor } from "../services/studioRender";
 import { useAppStore } from "../store/appStore";
+import ErrorBoundary from "./ErrorBoundary";
 import type { Garment } from "../types";
 
 /** Soft neutral "product photo" backdrop behind cover-fit imagery. */
@@ -106,9 +107,27 @@ export default function GarmentPhoto({
   // Last-resort inline derivation (should already be cached on the record).
   // The img2img final wins when ready, then the composite — same 4:5 frame
   // and backdrop palette, so grids stay uniform whichever source is showing.
+  // renderingFor never throws (normalises corrupt records), but the tile is
+  // additionally isolated: one poisoned garment shows a fallback tile
+  // instead of erasing the whole screen via the top boundary.
   const src = final ?? composite ?? garment.rendering ?? renderingFor(garment);
 
   return (
+    <ErrorBoundary
+      resetKey={`${garment.id}-${retryTick}`}
+      fallback={
+        <div
+          className="flex h-full w-full flex-col items-center justify-center gap-1 px-3 text-center"
+          style={{ background: BOARD_TILE_BG }}
+          role="status"
+          aria-label={`${garment.name} preview unavailable`}
+        >
+          <p className="line-clamp-2 text-[11px] font-extrabold text-mut">
+            {garment.name}
+          </p>
+        </div>
+      }
+    >
     <div
       className="relative flex h-full w-full items-center justify-center overflow-hidden"
       style={{ background: BOARD_TILE_BG }}
@@ -129,5 +148,6 @@ export default function GarmentPhoto({
         </span>
       )}
     </div>
+    </ErrorBoundary>
   );
 }
