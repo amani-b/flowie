@@ -42,6 +42,12 @@ import {
 } from "../services/dataService";
 import { OCCASION_META, uid } from "../lib/utils";
 import { supabase } from "../services/supabaseClient";
+import {
+  clearBlobs,
+  deleteBlobsFor,
+  pruneBlobs,
+  saveBlob,
+} from "../services/blobStore";
 
 interface WeatherState {
   status: LoadStatus;
@@ -309,23 +315,72 @@ function mergeSchedules(current: Schedule[], fetched: Schedule[]): Schedule[] {
 // well under ~2 s once the model is cached. The heavy dependency stays out
 // of the initial bundle via dynamic import.
 const studioCompositeInFlight = new Set<string>();
-let studioCompositeChain: Promise<void> = Promise.resolve();
+// Phase 5 speed: two inference lanes instead of one strictly-serial chain,
+// so bulk uploads clear ~2× faster. Low-memory devices (phones reporting
+// ≤4 GB) stay on one lane to avoid ONNX memory pressure. Each lane is still
+// just a background promise — the UI thread is never blocked.
+const studioCompositeQueue: string[] = [];
+let studioCompositeActive = 0;
+
+function compositeLaneCount(): number {
+  try {
+    const mem = (navigator as unknown as { deviceMemory?: number })?.deviceMemory;
+    if (typeof mem === "number" && mem <= 4) return 1;
+  } catch {
+    /* fall through to default */
+  }
+  return 2;
+}
 
 function runStudioCompositeJob(id: string): void {
-  if (studioCompositeInFlight.has(id)) return;
-  studioCompositeInFlight.add(id);
-  studioCompositeChain = studioCompositeChain.then(async () => {
-    try {
+  if (studioCompositeInFlight.has(id) || studioCompositeQueue.includes(id)) return;
+  studioCompositeQueue.push(id);
+  pumpStudioCompositeQueue();
+}
+
+function pumpStudioCompositeQueue(): void {
+  while (
+    studioCompositeActive < compositeLaneCount() &&
+    studioCompositeQueue.length > 0
+  ) {
+    const next = studioCompositeQueue.shift()!;
+    if (studioCompositeInFlight.has(next)) continue;
+    const current = useAppStore.getState().garments.find((g) => g.id === next);
+    const source = current?.photo;
+    // Photo is the only input: nothing to segment (e.g. a manual entry
+    // with no photo, or a record whose base64 was stripped from storage)
+    // → leave the SVG fallback in place, don't mark failed.
+    if (!current || !source) continue;
+    studioCompositeInFlight.add(next);
+    studioCompositeActive++;
+    void runCompositeWorker(next).finally(() => {
+      studioCompositeActive--;
+      pumpStudioCompositeQueue();
+    });
+  }
+}
+
+async function runCompositeWorker(id: string): Promise<void> {
+  try {
       const current = useAppStore.getState().garments.find((g) => g.id === id);
       const source = current?.photo;
-      // Photo is the only input: nothing to segment (e.g. a manual entry
-      // with no photo, or a record whose base64 was stripped from storage)
-      // → leave the SVG fallback in place, don't mark failed.
+      // Re-checked at worker start (a lane may have waited behind another):
+      // nothing to segment → SVG fallback carries on, never "failed".
       if (!current || !source) return;
       const { preprocessGarmentPhoto } = await import(
         "../services/studioComposite"
       );
       const result = await preprocessGarmentPhoto(source);
+      if (result.status === "ready" && result.studio_composite) {
+        // Persist the blob to IndexedDB (fire-and-forget) — the lean
+        // localStorage snapshot no longer carries ~100 KB JPEGs, so this
+        // is what brings the composite back after a reload.
+        try {
+          saveBlob(id, "composite", result.studio_composite);
+        } catch {
+          /* best-effort */
+        }
+      }
       useAppStore.setState((s) => {
         const apply = (g: Garment): Garment =>
           g.id === id
@@ -381,7 +436,6 @@ function runStudioCompositeJob(id: string): void {
         /* enhance kick is best-effort */
       }
     }
-  });
 }
 
 /* ------------------- Phase 4 studio-enhance background jobs ------------- */
@@ -503,6 +557,56 @@ function eligibleUpgradeIds(garments: Garment[]): string[] {
   return garments
     .filter((g) => !g.studioRenderUrl && (g.photo || g.studioComposite))
     .map((g) => g.id);
+}
+
+/**
+ * Merge IndexedDB image blobs back into the lean in-memory state.
+ * Never rejects: a missing blob just leaves the SVG/final fallback
+ * showing (always correct). Also backfills IDB from any in-state
+ * `data:` blobs (first boot after the v10 persist slimming) and prunes
+ * blobs for deleted garments. Await it before resuming pending jobs so
+ * photo-gated resume sees its sources.
+ */
+async function rehydrateBlobs(): Promise<void> {
+  try {
+    const { loadAllBlobs } = await import("../services/blobStore").catch(
+      () => ({ loadAllBlobs: null as null | (() => Promise<Map<string, { photo?: string; composite?: string }>>) })
+    );
+    if (!loadAllBlobs) return;
+    const all = await loadAllBlobs().catch(
+      () => new Map<string, { photo?: string; composite?: string }>()
+    );
+    const s = useAppStore.getState();
+    // Backfill the store from in-state blobs (v10 slimming leaves old
+    // snapshots carrying blobs in memory on first load).
+    for (const g of s.garments) {
+      if (g.photo?.startsWith("data:")) saveBlob(g.id, "photo", g.photo);
+      if (g.studioComposite?.startsWith("data:")) {
+        saveBlob(g.id, "composite", g.studioComposite);
+      }
+    }
+    if (all.size > 0) {
+      let changed = false;
+      const garments = s.garments.map((g) => {
+        const pair = all.get(g.id);
+        if (!pair) return g;
+        let next = g;
+        if (!next.photo && pair.photo) {
+          next = { ...next, photo: pair.photo };
+          changed = true;
+        }
+        if (!next.studioComposite && pair.composite) {
+          next = { ...next, studioComposite: pair.composite };
+          changed = true;
+        }
+        return next;
+      });
+      if (changed) useAppStore.setState({ garments });
+    }
+    pruneBlobs(new Set(s.garments.map((g) => g.id)));
+  } catch {
+    /* best-effort */
+  }
 }
 
 function pumpClosetUpgrade(): void {
@@ -699,7 +803,7 @@ export const useAppStore = create<AppStore>()(
         // never burst the ~5/day free quota).
         // Phase 5 upgrade runs never auto-resume: a "running" snapshot from
         // before the reload parks as "paused" so quota can't burn without
-        // an explicit tap. Individually-pending garments above still resume.
+        // an explicit tap. Individually-pending garments below still resume.
         try {
           const up = get().closetUpgrade;
           if (up && up.status === "running") {
@@ -709,6 +813,14 @@ export const useAppStore = create<AppStore>()(
           }
         } catch {
           /* upgrade park is best-effort */
+        }
+        // Blob sources first (lean v10 snapshots omit them): IDB reads are
+        // milliseconds-local, and photo-gated resume below needs them.
+        // Tiles already painted from SVG/final — this never blocks display.
+        try {
+          await rehydrateBlobs();
+        } catch {
+          /* rehydrate is best-effort */
         }
         try {
           for (const g of get().garments) {
@@ -798,6 +910,13 @@ export const useAppStore = create<AppStore>()(
               looks: mergeKeptLocal(s.looks, looks),
               schedules: mergeSchedules(s.schedules, schedules),
             });
+            // Cloud rows may carry photo URLs the lean snapshot lacks —
+            // merge stored composites back so tiles upgrade instantly.
+            try {
+              await rehydrateBlobs();
+            } catch {
+              /* best-effort */
+            }
           }
         } catch (error: any) {
           console.error("Error in hydrateFromCloud:", error?.message ?? error, error?.status);
@@ -822,6 +941,11 @@ export const useAppStore = create<AppStore>()(
                 looks: mergeKeptLocal(s.looks, retryData.looks),
                 schedules: mergeSchedules(s.schedules, schedules),
               });
+              try {
+                await rehydrateBlobs();
+              } catch {
+                /* best-effort */
+              }
             }
             return;
           } catch (retryError: any) {
@@ -942,6 +1066,16 @@ export const useAppStore = create<AppStore>()(
             pendingGarments: new Set(toSet(s._syncState.pendingGarments)).add(id),
           }
         }));
+        // Stash the source photo in IndexedDB (fire-and-forget): the lean
+        // persist snapshot omits it, and this is what lets composites
+        // (re)build after a reload without re-uploading.
+        if (normalizedGarment.photo?.startsWith("data:")) {
+          try {
+            saveBlob(id, "photo", normalizedGarment.photo);
+          } catch {
+            /* best-effort */
+          }
+        }
 
         // The studio rendering was already generated + cached on the record
         // above (sync, infallible) — nothing to warm, nothing to await.
@@ -1036,7 +1170,13 @@ export const useAppStore = create<AppStore>()(
         // Marks pending so GarmentPhoto can show progress, then runs the
         // same serialised background job as the upload path.
         const g = get().garments.find((x) => x.id === id);
-        if (!g || !g.photo || studioCompositeInFlight.has(id)) return;
+        if (
+          !g ||
+          !g.photo ||
+          studioCompositeInFlight.has(id) ||
+          studioCompositeQueue.includes(id)
+        )
+          return;
         set((s) => ({
           garments: s.garments.map((x) =>
             x.id === id ? { ...x, studioCompositeStatus: "pending" as const } : x
@@ -1143,6 +1283,14 @@ export const useAppStore = create<AppStore>()(
         const user = get().user;
         // Get userId for storage cleanup before removing from state
         const userId = user?.id;
+        // Drop any queued composite work + stored blobs for the garment.
+        const qIdx = studioCompositeQueue.indexOf(id);
+        if (qIdx >= 0) studioCompositeQueue.splice(qIdx, 1);
+        try {
+          deleteBlobsFor(id);
+        } catch {
+          /* best-effort */
+        }
         set((s) => ({
           garments: s.garments.filter((g) => g.id !== id),
           closetUpgrade:
@@ -1176,6 +1324,12 @@ export const useAppStore = create<AppStore>()(
       },
       clearAllData: () => {
         clearUpgradeTimer();
+        studioCompositeQueue.length = 0;
+        try {
+          clearBlobs();
+        } catch {
+          /* best-effort */
+        }
         set({ garments: [], looks: [], today: null, generation: IDLE_GEN, stylePrefs: null, closetUpgrade: { ...IDLE_UPGRADE } });
         get().notify("Local data erased");
       },
@@ -1496,7 +1650,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: "fitflow-store",
-      version: 9,
+      version: 10,
       storage: safeStorage,
       // Rehydrated _syncState arrives as string[] (see partialize); restore
       // Sets so every selector/mutator can treat them uniformly.
@@ -1723,15 +1877,43 @@ export const useAppStore = create<AppStore>()(
             },
           } as never;
         }
+        // v9 → v10 (speed): image blobs moved to IndexedDB — localStorage
+        // snapshots no longer carry them. Nothing to transform: in-memory
+        // blobs backfill IDB at boot (rehydrateBlobs) and the next persist
+        // write slims itself. Park a mid-run upgrade as paused (same quota
+        // rule as before).
+        if (version < 10) {
+          const prev = (state as any).closetUpgrade as
+            | ClosetUpgradeState
+            | undefined;
+          if (prev && typeof prev === "object" && prev.status === "running") {
+            return {
+              ...state,
+              closetUpgrade: { ...prev, status: "paused" as const, currentId: null },
+            } as never;
+          }
+          return state as never;
+        }
         return state as never;
       },
       partialize: (s) => ({
         theme: s.theme,
         units: s.units,
-        garments: s.garments.map((g) => ({ ...g, photo: undefined })), // omit base64 photos from localStorage
-        // Snapshots carry the SVG rendering as their display image; the
-        // ~100 KB studio-composite JPEGs would multiply localStorage usage
-        // per snapshot and risk quota failure. Live garments keep theirs.
+        // Lean snapshots: image blobs live in IndexedDB (see blobStore),
+        // never in localStorage. A 40-item closet of ~100 KB composites is
+        // ~4 MB of JSON stringify/parse on EVERY store write — jank plus a
+        // quota wall. SVG `rendering` + `studioRenderUrl` strings (a few KB
+        // each) stay: tiles paint instantly from this snapshot alone, and
+        // blobs merge back silently at boot (rehydrateBlobs).
+        garments: s.garments.map((g) => ({
+          ...g,
+          photo: undefined,
+          studioComposite: undefined,
+        })),
+        // Snapshots carry the SVG rendering as their display image; photo
+        // sources + ~100 KB studio-composite JPEGs would multiply
+        // localStorage usage per snapshot and risk quota failure. Live
+        // garments keep their blobs in IndexedDB instead.
         looks: s.looks.map((l) => ({
           ...l,
           outfit: Object.fromEntries(
@@ -1740,6 +1922,7 @@ export const useAppStore = create<AppStore>()(
               g
                 ? {
                     ...g,
+                    photo: undefined,
                     studioComposite: undefined,
                     studioCompositeStatus: undefined,
                   }
@@ -1757,6 +1940,7 @@ export const useAppStore = create<AppStore>()(
                   g
                     ? {
                         ...g,
+                        photo: undefined,
                         studioComposite: undefined,
                         studioCompositeStatus: undefined,
                       }

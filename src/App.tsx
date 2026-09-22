@@ -204,18 +204,14 @@ export default function App() {
     void boot();
   }, [boot]);
 
-  // Pre-fetch the on-device segmentation model while idle so the first
-  // upload's background removal lands in well under ~2 s. Best-effort and
-  // offline-safe: a missed warm-up just means the first job downloads it.
+  // Pre-fetch the on-device segmentation model at boot so the first
+  // upload's background removal doesn't eat the ~40 MB download in its
+  // critical path. Best-effort and offline-safe: warm is idempotent and a
+  // missed warm-up just means the first job downloads the model itself.
   useEffect(() => {
-    const idle =
-      (window as unknown as { requestIdleCallback?: (cb: () => void) => void })
-        .requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 3000));
-    idle(() => {
-      import("./services/studioComposite")
-        .then((m) => m.warmStudioComposite())
-        .catch(() => {});
-    });
+    import("./services/studioComposite")
+      .then((m) => m.warmStudioComposite())
+      .catch(() => {});
   }, []);
 
   return (
