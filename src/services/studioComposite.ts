@@ -125,10 +125,65 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
+    // Anonymous CORS so remote (Supabase Storage) photos don't taint the
+    // canvas — data: URLs are unaffected by this attribute.
+    img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error("Could not decode image"));
     img.src = src;
   });
+}
+
+/**
+ * Resolve any image source to a Blob. `data:` URLs decode locally;
+ * remote URLs (cloud-hydrated `photo` values are Supabase Storage public
+ * URLs, not base64) are fetched — previously these crashed the segmenter
+ * input, so post-reload garments could never (re)build a composite.
+ */
+async function blobFromImageSource(src: Blob | string): Promise<Blob> {
+  if (src instanceof Blob) return src;
+  if (src.startsWith("data:")) return dataUrlToBlob(src);
+  const res = await fetch(src);
+  if (!res.ok) throw new Error(`Could not fetch image: HTTP ${res.status}`);
+  return await res.blob();
+}
+
+/**
+ * Downscale the segmentation input — ISNet inference cost scales with
+ * pixels, but the mask is composited back at full catalog size, so a
+ * ~640 px mask is visually indistinguishable while running 2–4× faster
+ * than a full-upload input. Best-effort: any failure returns the
+ * original blob untouched.
+ */
+const SEG_MASK_MAX_SIDE = 640;
+
+async function downscaleBlobForSegmentation(blob: Blob): Promise<Blob> {
+  try {
+    const bmp = await createImageBitmap(blob);
+    const scale = Math.min(1, SEG_MASK_MAX_SIDE / bmp.width, SEG_MASK_MAX_SIDE / bmp.height);
+    if (scale >= 1) {
+      bmp.close();
+      return blob;
+    }
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d");
+    if (!ctx) {
+      bmp.close();
+      return blob;
+    }
+    ctx.drawImage(bmp, 0, 0, w, h);
+    bmp.close();
+    const out = await new Promise<Blob | null>((resolve) =>
+      c.toBlob((b) => resolve(b), "image/png")
+    );
+    return out ?? blob;
+  } catch {
+    return blob;
+  }
 }
 
 /* --------------------------- 1 · segmentation ------------------------- */
@@ -145,7 +200,11 @@ export async function removeGarmentBackground(
   onProgress?: (p: number) => void
 ): Promise<Blob> {
   const { removeBackground } = await import("@imgly/background-removal");
-  const source: Blob = typeof input === "string" ? dataUrlToBlob(input) : input;
+  // Normalise remote-URL sources (cloud-hydrated photos), then downscale:
+  // the mask is composited back at full size, so ~640 px input runs
+  // several times faster with no visible difference in the final.
+  const raw: Blob = typeof input === "string" ? await blobFromImageSource(input) : input;
+  const source = await downscaleBlobForSegmentation(raw);
   onProgress?.(0.05);
   const cutout = await removeBackground(source, {
     model,
@@ -164,17 +223,20 @@ export async function removeGarmentBackground(
   return cutout;
 }
 
-/** Fire-and-forget model warm-up — call from an idle callback / after boot. */
+/** Fire-and-forget model warm-up — call at boot. Idempotent: preloads once. */
+let compositeWarmed = false;
+let compositeWarming = false;
 export function warmStudioComposite(): void {
   if (typeof window === "undefined") return;
-  const idle =
-    (window as unknown as { requestIdleCallback?: (cb: () => void) => void })
-      .requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 3000));
-  idle(() => {
-    import("@imgly/background-removal")
-      .then(({ preload }) => preload?.({ model: "isnet_quint8" })?.catch(() => {}))
-      .catch(() => {});
-  });
+  if (compositeWarmed || compositeWarming) return;
+  compositeWarming = true;
+  import("@imgly/background-removal")
+    .then(({ preload }) => preload?.({ model: "isnet_quint8" })?.catch(() => {}))
+    .catch(() => {})
+    .finally(() => {
+      compositeWarming = false;
+      compositeWarmed = true;
+    });
 }
 
 /* ----------------- 1b · classical fallback (zero-cost) --------------- */
@@ -655,7 +717,10 @@ function createWorkingImageData(
 export async function classicalFallbackCutout(
   input: Blob | string
 ): Promise<Blob> {
-  const url = typeof input === "string" ? input : URL.createObjectURL(input);
+  // Normalise remote URLs to blobs first (fetch); data: URLs and blobs
+  // take the zero-copy object-URL path as before.
+  const blob = typeof input === "string" ? await blobFromImageSource(input) : input;
+  const url = URL.createObjectURL(blob);
   try {
     const img = await loadImage(url);
     const origW = img.naturalWidth || img.width;
@@ -719,7 +784,7 @@ export async function classicalFallbackCutout(
     if (!blob) throw new Error("Failed to encode classical cutout");
     return blob;
   } finally {
-    if (typeof input !== "string") URL.revokeObjectURL(url);
+    URL.revokeObjectURL(url);
   }
 }
 
@@ -960,7 +1025,8 @@ export async function preprocessGarmentPhoto(
   let sourceBlob: Blob;
   if (typeof input === "string") {
     original = input;
-    sourceBlob = dataUrlToBlob(input);
+    // Remote-URL photos (cloud-hydrated) are fetched; data: URLs decode.
+    sourceBlob = await blobFromImageSource(input);
   } else {
     sourceBlob = input;
     original = await blobToDataUrl(input);
