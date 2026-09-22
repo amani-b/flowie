@@ -636,6 +636,7 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
   const removeGarment = useAppStore((s) => s.removeGarment);
   const retryStudioComposite = useAppStore((s) => s.retryStudioComposite);
   const retryStudioRender = useAppStore((s) => s.retryStudioRender);
+  const retryStudioFlatlay = useAppStore((s) => s.retryStudioFlatlay);
   const notify = useAppStore((s) => s.notify);
   const [confirmDel, setConfirmDel] = useState(false);
 
@@ -682,6 +683,34 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 {g.studioCompositeStatus === "failed" ? "Try again" : "Clean background"}
+              </button>
+            </div>
+          ) : null}
+          {/* Free photo-faithful AI flat-lay (TryOffDiffv2-MGT ZeroGPU):
+              same garment rebuilt top-down. Shoes/extras have no try-off
+              model and keep the free composite finish. Quota-safe: budgeted
+              auto-run + explicit tap only, free fallbacks always intact. */}
+          {g.studioFlatLay && g.studioFlatLayStatus === "ready" ? (
+            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
+              <Sparkles className="h-3.5 w-3.5 text-acc" /> AI flat-lay · true to your photo
+            </p>
+          ) : g.studioFlatLayStatus === "pending" ? (
+            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-acc" /> Laying flat… free preview showing
+            </p>
+          ) : (g.studioComposite || g.photo) && !g.studioFlatLay ? (
+            <div className="flex items-center justify-between gap-2 rounded-[14px] border border-line px-3.5 py-2.5">
+              <p className="text-[11px] font-bold leading-snug text-mut">
+                {g.studioFlatLayStatus === "failed"
+                  ? "Flat-lay didn’t run — free preview kept. Retry anytime."
+                  : "Rebuild this as a clean top-down flat-lay — free."}
+              </p>
+              <button
+                onClick={() => retryStudioFlatlay(g.id)}
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-acc px-3 py-1.5 text-[11px] font-extrabold text-accink transition active:scale-95"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                {g.studioFlatLayStatus === "failed" ? "Try again" : "Flat-lay"}
               </button>
             </div>
           ) : null}

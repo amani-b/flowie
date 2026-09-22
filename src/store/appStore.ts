@@ -161,6 +161,12 @@ export interface AppStore {
    * stay on "failed" with the SVG fallback — never blocking.
    */
   retryStudioRender: (id: string) => void;
+  /**
+   * Manual (re)try for the photo-faithful AI flat-lay. Cost-gated: no-op
+   * with a notice when the master switch is off (prototype stays free) or
+   * the daily budget is spent. Failures stay "failed" with free fallbacks.
+   */
+  retryStudioFlatlay: (id: string) => void;
   removeGarment: (id: string) => void;
   restoreSamples: () => void;
   clearAllData: () => void;
@@ -430,10 +436,17 @@ async function runCompositeWorker(id: string): Promise<void> {
       // Phase 4: chain the img2img enhance AFTER the composite lands, so
       // the Space gets the isolated garment (not the raw photo) as input —
       // still exactly one enhance call per garment, never per view.
+      // Flat-lay: chained too (composite-first input). Cost-gated inside —
+      // a free no-op unless VITE_ENABLE_FLATLAY_AI=true + budget remains.
       try {
         runStudioEnhanceJob(id);
       } catch {
         /* enhance kick is best-effort */
+      }
+      try {
+        runStudioFlatlayJob(id);
+      } catch {
+        /* flat-lay kick is best-effort */
       }
     }
 }
@@ -534,6 +547,112 @@ function runStudioEnhanceJob(id: string): void {
   });
 }
 
+/* ------------------- AI flat-lay background jobs ---------------------- */
+// FREE photo-faithful flat-lay via the TryOffDiffv2-MGT ZeroGPU Space
+// (see hf-tryoff/ + services/studioTryoff.ts). Hybrid trigger: auto-chained
+// after the composite (budgeted) + explicit manual tap. $0 inside the free
+// ZeroGPU quota — category gate + separate daily budget + serialised chain
+// so a bulk upload can't burst it. (The Gemini path in studioFlatlay.ts
+// stays dormant — billable, off by default, not wired to any trigger.)
+const studioFlatlayInFlight = new Set<string>();
+let studioFlatlayChain: Promise<void> = Promise.resolve();
+
+function runStudioFlatlayJob(id: string): void {
+  if (studioFlatlayInFlight.has(id)) return;
+  const snapshot = useAppStore.getState().garments.find((g) => g.id === id);
+  // No source, or flat-lay already cached — never re-generate on view.
+  // Retry path re-enters via retryStudioFlatlay.
+  if (!snapshot || snapshot.studioFlatLay) return;
+  if (!snapshot.photo && !snapshot.studioComposite) return;
+  studioFlatlayInFlight.add(id);
+  studioFlatlayChain = studioFlatlayChain.then(async () => {
+    try {
+      const state = useAppStore.getState();
+      const current = state.garments.find((g) => g.id === id);
+      if (!current) return;
+      const { requestStudioTryoff, tryoffClassFor } = await import(
+        "../services/studioTryoff"
+      );
+      // Category gate BEFORE marking pending: shoes/accessories have no
+      // try-off model — free composite stays the finish, zero noise.
+      const garmentClass = tryoffClassFor(current.category);
+      if (!garmentClass) return;
+      useAppStore.setState((s) => ({
+        garments: s.garments.map((g) =>
+          g.id === id ? { ...g, studioFlatLayStatus: "pending" as const } : g
+        ),
+      }));
+      const outcome = await requestStudioTryoff({
+        garmentId: id,
+        garmentClass,
+        compositeDataUrl: current.studioComposite,
+        photoDataUrl: current.photo,
+      });
+      if (outcome.status === "ready") {
+        const url = outcome.flatlayDataUrl;
+        try {
+          const { saveBlob } = await import("../services/blobStore");
+          saveBlob(id, "flatlay", url);
+        } catch {
+          /* best-effort */
+        }
+        useAppStore.setState((s) => {
+          const apply = (g: Garment): Garment =>
+            g.id === id
+              ? { ...g, studioFlatLay: url, studioFlatLayStatus: "ready" as const }
+              : g;
+          const fixOutfit = (o: Record<string, Garment | undefined>) => {
+            const next = { ...o };
+            for (const k of Object.keys(next)) {
+              const piece = next[k];
+              if (piece && piece.id === id) next[k] = apply(piece);
+            }
+            return next;
+          };
+          return {
+            garments: s.garments.map(apply),
+            looks: s.looks.map((l) => ({
+              ...l,
+              outfit: fixOutfit(l.outfit as Record<string, Garment | undefined>) as typeof l.outfit,
+            })),
+            today: s.today
+              ? {
+                  ...s.today,
+                  outfit: fixOutfit(s.today.outfit as Record<string, Garment | undefined>) as typeof s.today.outfit,
+                }
+              : s.today,
+          };
+        });
+      } else if (outcome.status === "failed") {
+        console.warn("studio-flatlay deferred:", outcome.error);
+        useAppStore.setState((s) => ({
+          garments: s.garments.map((g) =>
+            g.id === id ? { ...g, studioFlatLayStatus: "failed" as const } : g
+          ),
+        }));
+      } else {
+        // "skipped" (mock-mode / budget spent / function undeployed):
+        // clear the pending mark so the tile rests on free fallbacks with
+        // no pill — a later session can still run it.
+        useAppStore.setState((s) => ({
+          garments: s.garments.map((g) =>
+            g.id === id ? { ...g, studioFlatLayStatus: undefined } : g
+          ),
+        }));
+      }
+    } catch (e) {
+      console.warn("studio-flatlay deferred:", e);
+      useAppStore.setState((s) => ({
+        garments: s.garments.map((g) =>
+          g.id === id ? { ...g, studioFlatLayStatus: "failed" as const } : g
+        ),
+      }));
+    } finally {
+      studioFlatlayInFlight.delete(id);
+    }
+  });
+}
+
 /* ------------------- Phase 5 closet-upgrade orchestrator -------------- */
 // Explicit opt-in rollout for pre-Phase-4 garments (never automatic —
 // auto-running would burst the ~5/day free ZeroGPU quota by surprise).
@@ -584,6 +703,9 @@ async function rehydrateBlobs(): Promise<void> {
       if (g.studioComposite?.startsWith("data:")) {
         saveBlob(g.id, "composite", g.studioComposite);
       }
+      if (g.studioFlatLay?.startsWith("data:")) {
+        saveBlob(g.id, "flatlay", g.studioFlatLay);
+      }
     }
     if (all.size > 0) {
       let changed = false;
@@ -597,6 +719,10 @@ async function rehydrateBlobs(): Promise<void> {
         }
         if (!next.studioComposite && pair.composite) {
           next = { ...next, studioComposite: pair.composite };
+          changed = true;
+        }
+        if (!next.studioFlatLay && (pair as { flatlay?: string }).flatlay) {
+          next = { ...next, studioFlatLay: (pair as { flatlay?: string }).flatlay };
           changed = true;
         }
         return next;
@@ -1216,6 +1342,29 @@ export const useAppStore = create<AppStore>()(
         }));
         runStudioEnhanceJob(id);
       },
+      retryStudioFlatlay: (id) => {
+        // Manual retry for the free AI flat-lay (failed / never-ran).
+        // Pre-checks with notices: unsupported category (shoes/extras keep
+        // the free composite finish) and spent daily budget. Mock mode /
+        // undeployed function flow through the job and land back on free
+        // fallbacks without noise.
+        const g = get().garments.find((x) => x.id === id);
+        if (!g || g.studioFlatLay || studioFlatlayInFlight.has(id)) return;
+        if (!g.studioComposite && !g.photo) return;
+        void import("../services/studioTryoff").then(
+          ({ tryoffClassFor, FLATLAY_TRYOFF_DAILY_BUDGET, getTryoffDailyCount }) => {
+            if (!tryoffClassFor(g.category)) {
+              get().notify("Free preview is the finish for shoes & extras", "err");
+              return;
+            }
+            if (getTryoffDailyCount() >= FLATLAY_TRYOFF_DAILY_BUDGET) {
+              get().notify("Today's free flat-lay budget is spent — try tomorrow", "err");
+              return;
+            }
+            runStudioFlatlayJob(id);
+          }
+        );
+      },
       /* ---------------- Phase 5 closet upgrade (opt-in) --------------- */
       startClosetUpgrade: () => {
         // Explicit opt-in only — never auto-started (quota surprise guard).
@@ -1667,7 +1816,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: "fitflow-store",
-      version: 10,
+      version: 11,
       storage: safeStorage,
       // Rehydrated _syncState arrives as string[] (see partialize); restore
       // Sets so every selector/mutator can treat them uniformly.
@@ -1957,6 +2106,19 @@ export const useAppStore = create<AppStore>()(
             };
           }
         }
+        // v10 → v11: photo-faithful AI flat-lay fields. Old snapshots
+        // predate them — initialise idle (never "pending": no phantom
+        // progress, no surprise cost on reload).
+        if (version < 11) {
+          state = {
+            ...state,
+            garments: ((state as any).garments ?? []).map((g: any) => ({
+              ...g,
+              studioFlatLay: g.studioFlatLay ?? undefined,
+              studioFlatLayStatus: g.studioFlatLay ? "ready" : undefined,
+            })),
+          };
+        }
         return state as never;
       },
       partialize: (s) => ({
@@ -1972,6 +2134,7 @@ export const useAppStore = create<AppStore>()(
           ...g,
           photo: undefined,
           studioComposite: undefined,
+          studioFlatLay: undefined,
         })),
         // Snapshots carry the SVG rendering as their display image; photo
         // sources + ~100 KB studio-composite JPEGs would multiply
@@ -1988,6 +2151,8 @@ export const useAppStore = create<AppStore>()(
                     photo: undefined,
                     studioComposite: undefined,
                     studioCompositeStatus: undefined,
+                    studioFlatLay: undefined,
+                    studioFlatLayStatus: undefined,
                   }
                 : g,
             ])
@@ -2006,6 +2171,8 @@ export const useAppStore = create<AppStore>()(
                         photo: undefined,
                         studioComposite: undefined,
                         studioCompositeStatus: undefined,
+                        studioFlatLay: undefined,
+                        studioFlatLayStatus: undefined,
                       }
                     : g,
                 ])

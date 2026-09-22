@@ -19,7 +19,7 @@
  * store); only `data:` URLs go in.
  */
 
-export type BlobKind = "photo" | "composite";
+export type BlobKind = "photo" | "composite" | "flatlay";
 
 const DB_NAME = "flowie-blobs";
 const STORE_NAME = "blobs";
@@ -123,6 +123,7 @@ export function deleteBlobsFor(id: string): void {
         if (!store) return;
         store.delete(keyFor(id, "photo"));
         store.delete(keyFor(id, "composite"));
+        store.delete(keyFor(id, "flatlay"));
       })
       .catch(() => {
         /* best-effort */
@@ -154,6 +155,7 @@ export function clearBlobs(): void {
 export interface BlobPair {
   photo?: string;
   composite?: string;
+  flatlay?: string;
 }
 
 /**
@@ -199,7 +201,7 @@ export function loadAllBlobs(): Promise<Map<string, BlobPair>> {
                       if (sep > 0 && typeof getReq.result === "string") {
                         const kind = k.slice(0, sep);
                         const id = k.slice(sep + 1);
-                        if (kind === "photo" || kind === "composite") {
+                        if (kind === "photo" || kind === "composite" || kind === "flatlay") {
                           const cur = out.get(id) ?? {};
                           (cur as Record<string, string>)[kind] = getReq.result;
                           out.set(id, cur);
