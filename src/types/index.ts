@@ -37,7 +37,38 @@ export interface Garment {
   warmth: Warmth;
   formality: Formality;
   kind?: AccessoryKind; // only for accessories
-  photo?: string; // compressed data-URL (max ~1MB)
+  photo?: string; // compressed data-URL (max ~1MB) — source only, never displayed as the finished look
+  /**
+   * Opt-in "studio_composite" version (JPEG data URL, 768×1024): the original
+   * photo background-removed and composited onto the neutral studio backdrop
+   * with a soft drop shadow (see services/studioComposite.ts). Built
+   * automatically on-device for every upload carrying a photo; local-only,
+   * not synced — like patternMix. `rendering` (SVG) stays the instant
+   * fallback underneath and wins only until the composite is ready.
+   */
+  studioComposite?: string;
+  /** studio_composite build state — independent of renderStatus (SVG). */
+  studioCompositeStatus?: "pending" | "ready" | "failed";
+  /**
+   * Phase 4 img2img final (public URL in Supabase `wardrobe` bucket as
+   * `<userId>/<garmentId>-studio.jpg`, mirrored from the
+   * `studio_render_url` column). Built ONCE per garment at import time via
+   * the enhance-garment Edge Function (Phase 1 composite → FLUX.1-schnell
+   * Space, strength 0.3, 4 steps, seed 42) — never re-generated per view.
+   * Display precedence in GarmentPhoto: studioRenderUrl > studioComposite
+   * > SVG `rendering` fallback. Local-only until synced, like `photo`.
+   */
+  studioRenderUrl?: string;
+  /** img2img final build state — independent of SVG + composite states. */
+  studioRenderStatus?: "pending" | "ready" | "failed";
+  /**
+   * Cached studio rendering (SVG data URL): the single display image for
+   * this garment on every screen. Generated once via studioRender and stored
+   * on the record — never recomputed per screen visit.
+   */
+  rendering?: string;
+  /** ready = cached rendering loads; pending = still generating; failed = needs retry. */
+  renderStatus?: "pending" | "ready" | "failed";
   createdAt: number;
   syncStatus?: "synced" | "pending" | "error";
 }

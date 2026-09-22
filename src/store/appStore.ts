@@ -22,7 +22,7 @@ import type {
 import { DEMO_OUTFITS, DEMO_WARDROBE } from "../lib/mock";
 import { fetchWeather } from "../services/weather";
 import { generateStyle } from "../services/stylist";
-import { primeRendering } from "../services/renderService";
+import { ensureRendering } from "../services/studioRender";
 import {
   appMode,
   enterDemoMode as demoEnter,
@@ -109,6 +109,21 @@ export interface AppStore {
   toast: ToastMsg | null;
 
   addGarment: (g: Omit<Garment, "id" | "createdAt">, photoDataUrl?: string) => Promise<void>;
+  /** Generate-and-cache the studio rendering for one garment (legacy backfill + retry). */
+  backfillRendering: (id: string) => void;
+  /**
+   * Build (or rebuild) the background-removed neutral-backdrop composite
+   * for one garment. No-op while a job for that id is already running.
+   * Failures land on `studioCompositeStatus: "failed"` — the SVG rendering
+   * fallback is untouched.
+   */
+  retryStudioComposite: (id: string) => void;
+  /**
+   * Manual (re)try for the Phase 4 img2img final. Marks pending and runs
+   * the same once-per-garment background job as the upload path. Failures
+   * stay on "failed" with the SVG fallback — never blocking.
+   */
+  retryStudioRender: (id: string) => void;
   removeGarment: (id: string) => void;
   restoreSamples: () => void;
   clearAllData: () => void;
@@ -245,6 +260,187 @@ function mergeSchedules(current: Schedule[], fetched: Schedule[]): Schedule[] {
   return [...current.filter((s) => !fetchedIds.has(s.id)), ...fetched];
 }
 
+/* ------------------- studio-composite background jobs ------------------ */
+// Local-only, deterministic: ISNet segmentation + Canvas2D composite onto
+// the neutral backdrop (see services/studioComposite.ts). No APIs, no cost,
+// no person risk — the original photo and SVG fallback are never touched.
+//
+// Jobs are serialised through a module-level chain so a bulk upload can't
+// spike a phone CPU with N concurrent ONNX inferences; each resolves in
+// well under ~2 s once the model is cached. The heavy dependency stays out
+// of the initial bundle via dynamic import.
+const studioCompositeInFlight = new Set<string>();
+let studioCompositeChain: Promise<void> = Promise.resolve();
+
+function runStudioCompositeJob(id: string): void {
+  if (studioCompositeInFlight.has(id)) return;
+  studioCompositeInFlight.add(id);
+  studioCompositeChain = studioCompositeChain.then(async () => {
+    try {
+      const current = useAppStore.getState().garments.find((g) => g.id === id);
+      const source = current?.photo;
+      // Photo is the only input: nothing to segment (e.g. a manual entry
+      // with no photo, or a record whose base64 was stripped from storage)
+      // → leave the SVG fallback in place, don't mark failed.
+      if (!current || !source) return;
+      const { preprocessGarmentPhoto } = await import(
+        "../services/studioComposite"
+      );
+      const result = await preprocessGarmentPhoto(source);
+      useAppStore.setState((s) => {
+        const apply = (g: Garment): Garment =>
+          g.id === id
+            ? {
+                ...g,
+                ...(result.status === "ready" && result.studio_composite
+                  ? {
+                      studioComposite: result.studio_composite,
+                      studioCompositeStatus: "ready" as const,
+                    }
+                  : { studioCompositeStatus: "failed" as const }),
+              }
+            : g;
+        const fixOutfit = (o: Record<string, Garment | undefined>) => {
+          const next = { ...o };
+          for (const k of Object.keys(next)) {
+            const piece = next[k];
+            if (piece && piece.id === id) next[k] = apply(piece);
+          }
+          return next;
+        };
+        return {
+          garments: s.garments.map(apply),
+          looks: s.looks.map((l) => ({
+            ...l,
+            outfit: fixOutfit(l.outfit as Record<string, Garment | undefined>) as typeof l.outfit,
+          })),
+          today: s.today
+            ? {
+                ...s.today,
+                outfit: fixOutfit(s.today.outfit as Record<string, Garment | undefined>) as typeof s.today.outfit,
+              }
+            : s.today,
+        };
+      });
+    } catch (e) {
+      // Infallible by contract: offline, blocked WASM, corrupt input —
+      // anything lands here as "failed" and the SVG fallback carries on.
+      console.warn("studio-composite deferred:", e);
+      useAppStore.setState((s) => ({
+        garments: s.garments.map((g) =>
+          g.id === id ? { ...g, studioCompositeStatus: "failed" as const } : g
+        ),
+      }));
+    } finally {
+      studioCompositeInFlight.delete(id);
+      // Phase 4: chain the img2img enhance AFTER the composite lands, so
+      // the Space gets the isolated garment (not the raw photo) as input —
+      // still exactly one enhance call per garment, never per view.
+      try {
+        runStudioEnhanceJob(id);
+      } catch {
+        /* enhance kick is best-effort */
+      }
+    }
+  });
+}
+
+/* ------------------- Phase 4 studio-enhance background jobs ------------- */
+// One img2img call per garment, at import time, via the secret-holding
+// Edge Function (never from the browser bundle). Serialised so a bulk
+// upload can't burst the free ZeroGPU quota (~5/day). Failures land on
+// `studioRenderStatus: "failed"` — SVG + composite fallbacks untouched.
+const studioEnhanceInFlight = new Set<string>();
+let studioEnhanceChain: Promise<void> = Promise.resolve();
+
+function runStudioEnhanceJob(id: string): void {
+  if (studioEnhanceInFlight.has(id)) return;
+  const snapshot = useAppStore.getState().garments.find((g) => g.id === id);
+  // No source to enhance (manual entry), or final already cached — never
+  // re-generate on view. Retry path re-enters via retryStudioRender.
+  if (!snapshot || snapshot.studioRenderUrl) return;
+  if (!snapshot.photo && !snapshot.studioComposite) return;
+  studioEnhanceInFlight.add(id);
+  studioEnhanceChain = studioEnhanceChain.then(async () => {
+    try {
+      const state = useAppStore.getState();
+      const current = state.garments.find((g) => g.id === id);
+      const user = state.user;
+      // Mock/demo mode or signed out: no backend to hold HF_TOKEN — stay
+      // on SVG + composite fallbacks, don't mark failed (retry later).
+      if (!current || !user || user.isDemo) return;
+      const { requestStudioEnhance } = await import(
+        "../services/studioEnhance"
+      );
+      const outcome = await requestStudioEnhance({
+        userId: user.id,
+        garmentId: id,
+        compositeDataUrl: current.studioComposite,
+        photoDataUrl: current.photo,
+      });
+      if (outcome.status === "ready") {
+        const url = outcome.studioRenderUrl;
+        useAppStore.setState((s) => {
+          const apply = (g: Garment): Garment =>
+            g.id === id
+              ? { ...g, studioRenderUrl: url, studioRenderStatus: "ready" as const }
+              : g;
+          const fixOutfit = (o: Record<string, Garment | undefined>) => {
+            const next = { ...o };
+            for (const k of Object.keys(next)) {
+              const piece = next[k];
+              if (piece && piece.id === id) next[k] = apply(piece);
+            }
+            return next;
+          };
+          return {
+            garments: s.garments.map(apply),
+            looks: s.looks.map((l) => ({
+              ...l,
+              outfit: fixOutfit(l.outfit as Record<string, Garment | undefined>) as typeof l.outfit,
+            })),
+            today: s.today
+              ? {
+                  ...s.today,
+                  outfit: fixOutfit(s.today.outfit as Record<string, Garment | undefined>) as typeof s.today.outfit,
+                }
+              : s.today,
+          };
+        });
+        // Best-effort row persist (retrySync backfills via upsert anyway).
+        try {
+          await supabase
+            ?.from("wardrobe_items")
+            .update({ studio_render_url: url })
+            .eq("id", id);
+        } catch {
+          /* background persist is best-effort */
+        }
+      } else if (outcome.status === "failed") {
+        // API fail / timeout / function not deployed: don't block anything —
+        // save for retry from the Closet detail sheet.
+        console.warn("studio-enhance deferred:", outcome.error);
+        useAppStore.setState((s) => ({
+          garments: s.garments.map((g) =>
+            g.id === id ? { ...g, studioRenderStatus: "failed" as const } : g
+          ),
+        }));
+      }
+      // "skipped" (mock, no source): leave pending/undefined so a later
+      // live session can still enhance; SVG fallback carries on.
+    } catch (e) {
+      console.warn("studio-enhance deferred:", e);
+      useAppStore.setState((s) => ({
+        garments: s.garments.map((g) =>
+          g.id === id ? { ...g, studioRenderStatus: "failed" as const } : g
+        ),
+      }));
+    } finally {
+      studioEnhanceInFlight.delete(id);
+    }
+  });
+}
+
 export const useAppStore = create<AppStore>()(
   persist(
     (set, get) => ({
@@ -318,6 +514,31 @@ export const useAppStore = create<AppStore>()(
         retryTimer = setTimeout(() => {
           void get().retrySync().catch(() => {});
         }, 4000);
+        // Resume studio-composite jobs interrupted by a reload (persisted as
+        // "pending"): the SVG fallback is already on screen, the composite
+        // just enhances when it lands. Serialised by the job chain.
+        // Phase 4 enhance jobs resume the same way — but ONLY "pending"
+        // (a "failed" enhance waits for manual retry so a reload storm can
+        // never burst the ~5/day free quota).
+        try {
+          for (const g of get().garments) {
+            if (
+              g.studioCompositeStatus === "pending" &&
+              g.photo &&
+              !g.studioComposite
+            ) {
+              runStudioCompositeJob(g.id);
+            } else if (
+              g.studioRenderStatus === "pending" &&
+              !g.studioRenderUrl &&
+              (g.studioComposite || g.photo)
+            ) {
+              runStudioEnhanceJob(g.id);
+            }
+          }
+        } catch {
+          /* resume is best-effort */
+        }
       },
 
       completeAuth: (user) => {
@@ -508,7 +729,7 @@ export const useAppStore = create<AppStore>()(
         const id = crypto.randomUUID();
 
         // Normalize incoming garment to ensure colors/pattern are always present
-        const normalizedGarment: Garment = {
+        const normalizedGarment: Garment = ensureRendering({
           ...rest as Omit<Garment, "id" | "createdAt">,
           id,
           colors: rest.colors?.length ? rest.colors : [rest.color!],
@@ -516,7 +737,7 @@ export const useAppStore = create<AppStore>()(
           photo: photoDataUrl ?? rest.photo,
           createdAt: Date.now(),
           syncStatus: "pending",
-        };
+        });
         
         set((s) => ({
           garments: [normalizedGarment, ...s.garments],
@@ -526,11 +747,30 @@ export const useAppStore = create<AppStore>()(
           }
         }));
 
-        // Warm the generated studio-rendering cache now so the new piece
-        // shows its rendering (not a fallback) the moment Studio opens.
-        // Fire-and-forget: never blocks the save or cloud sync below.
-        primeRendering(normalizedGarment);
-
+        // The studio rendering was already generated + cached on the record
+        // above (sync, infallible) — nothing to warm, nothing to await.
+        // The background-removed composite builds async alongside it: save
+        // first (never block the upload on ONNX), enhance right after. The
+        // original photo stays untouched; GarmentPhoto shows the SVG until
+        // the composite lands, then swaps automatically.
+        // Phase 4: the img2img final is marked pending here so the detail
+        // sheet can show progress, but the single enhance call fires from
+        // runStudioCompositeJob's completion (composite-first input). The
+        // upload itself never awaits any of it.
+        if (normalizedGarment.photo && !normalizedGarment.studioComposite) {
+          set((s) => ({
+            garments: s.garments.map((garment) =>
+              garment.id === id
+                ? {
+                    ...garment,
+                    studioCompositeStatus: "pending" as const,
+                    studioRenderStatus: "pending" as const,
+                  }
+                : garment
+            ),
+          }));
+          runStudioCompositeJob(id);
+        }
         const user = get().user;
         if (!user || user.isDemo) {
           // Demo/mock mode: on-device only — nothing to sync.
@@ -573,6 +813,55 @@ export const useAppStore = create<AppStore>()(
             }
           }));
         }
+      },
+      backfillRendering: (id) => {
+        // One-shot generate-and-cache for records that predate renderings.
+        // Looks hold snapshot copies, so refresh those too.
+        const apply = (g: Garment): Garment =>
+          g.id === id ? ensureRendering({ ...g }) : g;
+        const fixOutfit = (o: Record<string, Garment | undefined>) => {
+          const next = { ...o };
+          for (const k of Object.keys(next)) {
+            const piece = next[k];
+            if (piece && piece.id === id) next[k] = ensureRendering({ ...piece });
+          }
+          return next;
+        };
+        set((s) => ({
+          garments: s.garments.map(apply),
+          looks: s.looks.map((l) => ({ ...l, outfit: fixOutfit(l.outfit as Record<string, Garment | undefined>) as typeof l.outfit })),
+          today: s.today
+            ? { ...s.today, outfit: fixOutfit(s.today.outfit as Record<string, Garment | undefined>) as typeof s.today.outfit }
+            : s.today,
+        }));
+      },
+      retryStudioComposite: (id) => {
+        // Manual (re)build from the DetailSheet: needs a photo to segment.
+        // Marks pending so GarmentPhoto can show progress, then runs the
+        // same serialised background job as the upload path.
+        const g = get().garments.find((x) => x.id === id);
+        if (!g || !g.photo || studioCompositeInFlight.has(id)) return;
+        set((s) => ({
+          garments: s.garments.map((x) =>
+            x.id === id ? { ...x, studioCompositeStatus: "pending" as const } : x
+          ),
+        }));
+        runStudioCompositeJob(id);
+      },
+      retryStudioRender: (id) => {
+        // Manual retry for the Phase 4 img2img final (failed / never-ran).
+        // Needs a composite or photo as input; skips when the final is
+        // already cached or a job is in flight (one call per garment —
+        // quota guard). Failures return to "failed" with SVG fallback.
+        const g = get().garments.find((x) => x.id === id);
+        if (!g || g.studioRenderUrl || studioEnhanceInFlight.has(id)) return;
+        if (!g.studioComposite && !g.photo) return;
+        set((s) => ({
+          garments: s.garments.map((x) =>
+            x.id === id ? { ...x, studioRenderStatus: "pending" as const } : x
+          ),
+        }));
+        runStudioEnhanceJob(id);
       },
       removeGarment: (id) => {
         const user = get().user;
@@ -920,7 +1209,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: "fitflow-store",
-      version: 5,
+      version: 8,
       storage: safeStorage,
       // Rehydrated _syncState arrives as string[] (see partialize); restore
       // Sets so every selector/mutator can treat them uniformly.
@@ -1021,15 +1310,143 @@ export const useAppStore = create<AppStore>()(
             },
           } as never;
         }
+        // v5 → v6: generate-and-cache studio renderings on every garment,
+        // including snapshot copies inside saved looks and today's outfit.
+        // Records without one predate the renderer — backfill, don't drop.
+        if (version < 6) {
+          const fixG = (g: any) => {
+            try {
+              return ensureRendering({ ...g });
+            } catch {
+              return { ...g, renderStatus: "failed" as const };
+            }
+          };
+          const fixOutfit = (o: any) => {
+            if (!o || typeof o !== "object") return o;
+            const next = { ...o };
+            for (const k of Object.keys(next)) {
+              if (next[k]?.id) next[k] = fixG(next[k]);
+            }
+            return next;
+          };
+          return {
+            ...state,
+            garments: ((state as any).garments ?? []).map(fixG),
+            looks: ((state as any).looks ?? []).map((l: any) => ({
+              ...l,
+              outfit: fixOutfit(l.outfit),
+            })),
+            today: (state as any).today
+              ? { ...(state as any).today, outfit: fixOutfit((state as any).today.outfit) }
+              : (state as any).today,
+          } as never;
+        }
+        // v6 → v7: studio-composite is garment-local only. Strip composites
+        // cached inside look/today snapshots (quota hygiene + a persisted
+        // "pending" there could never resolve); the SVG rendering fallback
+        // stays on every snapshot. Live garments are untouched — boot
+        // resumes any genuinely pending job.
+        if (version < 7) {
+          const stripSnap = (g: any) => {
+            if (!g || typeof g !== "object") return g;
+            const { studioComposite: _c, studioCompositeStatus: _s, ...rest } = g;
+            void _c;
+            void _s;
+            return rest;
+          };
+          const stripOutfit = (o: any) => {
+            if (!o || typeof o !== "object") return o;
+            const next = { ...o };
+            for (const k of Object.keys(next)) next[k] = stripSnap(next[k]);
+            return next;
+          };
+          return {
+            ...state,
+            looks: ((state as any).looks ?? []).map((l: any) => ({
+              ...l,
+              outfit: stripOutfit(l.outfit),
+            })),
+            today: (state as any).today
+              ? { ...(state as any).today, outfit: stripOutfit((state as any).today.outfit) }
+              : (state as any).today,
+          } as never;
+        }
+        // v7 → v8 (Phase 4): studio_render_url is garment-local like the
+        // composite — a persisted "pending" inside snapshots could never
+        // resolve and would risk a reload burst. Strip pending enhance
+        // state from snapshots; live garments untouched (boot resumes).
+        // studioRenderUrl *URLs* (small strings) stay on snapshots so saved
+        // looks keep showing the final when it exists; SVG fallback covers
+        // the rest.
+        if (version < 8) {
+          const stripSnap = (g: any) => {
+            if (!g || typeof g !== "object") return g;
+            if (g.studioRenderStatus === "pending" && !g.studioRenderUrl) {
+              const { studioRenderStatus: _s, ...rest } = g;
+              void _s;
+              return rest;
+            }
+            return g;
+          };
+          const stripOutfit = (o: any) => {
+            if (!o || typeof o !== "object") return o;
+            const next = { ...o };
+            for (const k of Object.keys(next)) next[k] = stripSnap(next[k]);
+            return next;
+          };
+          return {
+            ...state,
+            looks: ((state as any).looks ?? []).map((l: any) => ({
+              ...l,
+              outfit: stripOutfit(l.outfit),
+            })),
+            today: (state as any).today
+              ? { ...(state as any).today, outfit: stripOutfit((state as any).today.outfit) }
+              : (state as any).today,
+          } as never;
+        }
         return state as never;
       },
       partialize: (s) => ({
         theme: s.theme,
         units: s.units,
         garments: s.garments.map((g) => ({ ...g, photo: undefined })), // omit base64 photos from localStorage
-        looks: s.looks,
+        // Snapshots carry the SVG rendering as their display image; the
+        // ~100 KB studio-composite JPEGs would multiply localStorage usage
+        // per snapshot and risk quota failure. Live garments keep theirs.
+        looks: s.looks.map((l) => ({
+          ...l,
+          outfit: Object.fromEntries(
+            Object.entries(l.outfit).map(([k, g]) => [
+              k,
+              g
+                ? {
+                    ...g,
+                    studioComposite: undefined,
+                    studioCompositeStatus: undefined,
+                  }
+                : g,
+            ])
+          ) as typeof l.outfit,
+        })),
         schedules: s.schedules,
-        today: s.today,
+        today: s.today
+          ? {
+              ...s.today,
+              outfit: Object.fromEntries(
+                Object.entries(s.today.outfit).map(([k, g]) => [
+                  k,
+                  g
+                    ? {
+                        ...g,
+                        studioComposite: undefined,
+                        studioCompositeStatus: undefined,
+                      }
+                    : g,
+                ])
+              ) as typeof s.today.outfit,
+            }
+          : s.today,
         ownerId: s.ownerId,
         onboardedUsers: s.onboardedUsers,
         profile: s.profile,

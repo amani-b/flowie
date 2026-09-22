@@ -587,6 +587,8 @@ function AddForm({ onDone }: { onDone: () => void }) {
 
 function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: () => void }) {
   const removeGarment = useAppStore((s) => s.removeGarment);
+  const retryStudioComposite = useAppStore((s) => s.retryStudioComposite);
+  const retryStudioRender = useAppStore((s) => s.retryStudioRender);
   const notify = useAppStore((s) => s.notify);
   const [confirmDel, setConfirmDel] = useState(false);
 
@@ -609,6 +611,73 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
           <div className="relative h-56 overflow-hidden rounded-[20px]">
             <GarmentPhoto garment={g} eager />
           </div>
+          {/* Background-removal composite state: built on-device at upload,
+              original photo is never altered. Legacy / interrupted records
+              get an explicit opt-in retry — never a silent substitution. */}
+          {g.studioCompositeStatus === "ready" && g.studioComposite ? (
+            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
+              <Sparkles className="h-3.5 w-3.5 text-acc" /> Studio clean · background removed
+            </p>
+          ) : g.studioCompositeStatus === "pending" ? (
+            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-acc" /> Cleaning background…
+            </p>
+          ) : g.photo ? (
+            <div className="flex items-center justify-between gap-2 rounded-[14px] border border-line px-3.5 py-2.5">
+              <p className="text-[11px] font-bold leading-snug text-mut">
+                {g.studioCompositeStatus === "failed"
+                  ? "Background cleanup didn’t finish — original kept."
+                  : "Isolate this piece on the clean studio backdrop."}
+              </p>
+              <button
+                onClick={() => retryStudioComposite(g.id)}
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-acc px-3 py-1.5 text-[11px] font-extrabold text-accink transition active:scale-95"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                {g.studioCompositeStatus === "failed" ? "Try again" : "Clean background"}
+              </button>
+            </div>
+          ) : null}
+          {/* Phase 4 img2img final: one call per garment at import; the SVG
+              fallback always shows when this hasn't run or failed. Manual
+              retry only — never auto-retried, to respect the free quota. */}
+          {g.studioRenderUrl && g.studioRenderStatus === "ready" ? (
+            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
+              <Wand2 className="h-3.5 w-3.5 text-acc" /> Studio finish · AI re-light
+            </p>
+          ) : g.studioRenderStatus === "pending" ? (
+            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-acc" /> Studio finish queued… SVG showing
+            </p>
+          ) : (g.studioComposite || g.photo) && !g.studioRenderUrl ? (
+            <div className="flex items-center justify-between gap-2 rounded-[14px] border border-line px-3.5 py-2.5">
+              <p className="text-[11px] font-bold leading-snug text-mut">
+                {g.studioRenderStatus === "failed"
+                  ? "Studio finish didn’t run — SVG fallback kept. Retry when quota allows."
+                  : "Upgrade this piece to the AI studio finish (one-time)."}
+              </p>
+              <button
+                onClick={() => retryStudioRender(g.id)}
+                className="flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11px] font-extrabold text-mut transition active:scale-95"
+              >
+                <Wand2 className="h-3.5 w-3.5" />
+                {g.studioRenderStatus === "failed" ? "Retry finish" : "Try studio finish"}
+              </button>
+            </div>
+          ) : null}
+          {g.photo && (
+            <details className="rounded-[14px] border border-line px-3.5 py-2.5">
+              <summary className="cursor-pointer text-[11px] font-extrabold uppercase tracking-[0.14em] text-mut">
+                Original photo
+              </summary>
+              <img
+                src={g.photo}
+                alt={`Original photo of ${g.name}`}
+                loading="lazy"
+                className="mt-2 max-h-56 w-full rounded-[10px] object-contain"
+              />
+            </details>
+          )}
 
           <div className="grid grid-cols-2 gap-2.5">
             {[

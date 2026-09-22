@@ -55,6 +55,10 @@ export interface Database {
           id: string;
           user_id: string;
           image_url: string | null;
+          /** Cached studio rendering (data URL). Added by migration_render_url.sql; absent until applied. */
+          render_url?: string | null;
+          /** Phase 4 img2img final URL. Added by migration_studio_render_url.sql; absent until applied. */
+          studio_render_url?: string | null;
           category: string;
           color: string;
           colors: string[]; // Array of hex values, ordered by prominence
@@ -71,6 +75,8 @@ export interface Database {
           id?: string;
           user_id: string;
           image_url?: string | null;
+          render_url?: string | null;
+          studio_render_url?: string | null;
           category: string;
           color: string;
           colors?: string[]; // Array of hex values
@@ -87,6 +93,8 @@ export interface Database {
           id?: string;
           user_id?: string;
           image_url?: string | null;
+          render_url?: string | null;
+          studio_render_url?: string | null;
           category?: string;
           color?: string;
           colors?: string[];

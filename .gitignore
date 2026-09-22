@@ -6,6 +6,7 @@ node_modules/
 dist/
 build/
 target/
+out/
 
 # Logs and temp files
 *.log
@@ -61,4 +62,3 @@ htmlcov/
 
 # MyPy cache
 .mypy_cache/
-```
