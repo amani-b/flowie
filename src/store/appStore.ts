@@ -56,36 +56,8 @@ interface WeatherState {
 
 type SyncStatus = "synced" | "pending" | "error";
 
-/** Phase 5 rollout — explicit opt-in closet upgrade (never automatic). */
-export type ClosetUpgradeStatus =
-  | "idle"
-  | "running"
-  | "paused"
-  | "quota-paused"
-  | "done";
-
-export interface ClosetUpgradeState {
-  status: ClosetUpgradeStatus;
-  /** Eligible ids snapshotted at start (garments lacking studioRenderUrl). */
-  initialIds: string[];
-  /** Remaining ids not yet kicked (popped one per pace interval). */
-  queued: string[];
-  /** Last kicked id (job continues in the serial chains after kick). */
-  currentId: string | null;
-  total: number;
-  startedAt: number | null;
-  completedAt: number | null;
-}
-
-export const IDLE_UPGRADE: ClosetUpgradeState = {
-  status: "idle",
-  initialIds: [],
-  queued: [],
-  currentId: null,
-  total: 0,
-  startedAt: null,
-  completedAt: null,
-};
+/* Retired: ClosetUpgradeState (bulk re-light rollout) — the recon lane
+ * runs once per garment at import; no batch upgrade concept remains. */
 
 interface SyncState {
   pendingGarments: Set<string>;
@@ -149,35 +121,21 @@ export interface AppStore {
   /** Generate-and-cache the studio rendering for one garment (legacy backfill + retry). */
   backfillRendering: (id: string) => void;
   /**
-   * Build (or rebuild) the background-removed neutral-backdrop composite
-   * for one garment. No-op while a job for that id is already running.
-   * Failures land on `studioCompositeStatus: "failed"` — the SVG rendering
-   * fallback is untouched.
+   * Manual (re)try for garment reconstruction (failed / never-ran).
+   * Needs a photo as input; skips when recon is cached or a job is in
+   * flight (one call per garment — quota guard). Failures return to
+   * "failed" with photo/SVG fallbacks.
    */
-  retryStudioComposite: (id: string) => void;
+  retryRecon: (id: string) => void;
   /**
-   * Manual (re)try for the Phase 4 img2img final. Marks pending and runs
-   * the same once-per-garment background job as the upload path. Failures
-   * stay on "failed" with the SVG fallback — never blocking.
+   * Wearer-set print flag (logos/graphics/text → Klein detail renderer).
+   * Clears any cached recon so the other renderer runs on demand —
+   * one extra quota call, same as a manual retry.
    */
-  retryStudioRender: (id: string) => void;
-  /**
-   * Manual (re)try for the photo-faithful AI flat-lay. Cost-gated: no-op
-   * with a notice when the master switch is off (prototype stays free) or
-   * the daily budget is spent. Failures stay "failed" with free fallbacks.
-   */
-  retryStudioFlatlay: (id: string) => void;
+  setGarmentPrint: (id: string, hasPrint: boolean) => void;
   removeGarment: (id: string) => void;
   restoreSamples: () => void;
   clearAllData: () => void;
-
-  /* --------------------- Phase 5 closet upgrade ---------------------- */
-  /** Explicit opt-in rollout for pre-Phase-4 garments (never automatic). */
-  closetUpgrade: ClosetUpgradeState;
-  startClosetUpgrade: () => void;
-  pauseClosetUpgrade: () => void;
-  cancelClosetUpgrade: () => void;
-  dismissClosetUpgrade: () => void;
 
   refreshWeather: () => Promise<void>;
   generateToday: (occasion?: Occasion) => Promise<void>;
@@ -311,400 +269,167 @@ function mergeSchedules(current: Schedule[], fetched: Schedule[]): Schedule[] {
   return [...current.filter((s) => !fetchedIds.has(s.id)), ...fetched];
 }
 
-/* ------------------- studio-composite background jobs ------------------ */
-// Local-only, deterministic: ISNet segmentation + Canvas2D composite onto
-// the neutral backdrop (see services/studioComposite.ts). No APIs, no cost,
-// no person risk — the original photo and SVG fallback are never touched.
-//
-// Jobs are serialised through a module-level chain so a bulk upload can't
-// spike a phone CPU with N concurrent ONNX inferences; each resolves in
-// well under ~2 s once the model is cached. The heavy dependency stays out
-// of the initial bundle via dynamic import.
-const studioCompositeInFlight = new Set<string>();
-// Phase 5 speed: two inference lanes instead of one strictly-serial chain,
-// so bulk uploads clear ~2× faster. Low-memory devices (phones reporting
-// ≤4 GB) stay on one lane to avoid ONNX memory pressure. Each lane is still
-// just a background promise — the UI thread is never blocked.
-const studioCompositeQueue: string[] = [];
-let studioCompositeActive = 0;
+/* ------------------- garment-recon background jobs ------------------ */
+// Single reconstruction lane (replaces the retired composite / enhance /
+// flat-lay chains). One remote call per garment at import time via the
+// secret-holding `recon-garment` Edge Function (never from the browser
+// bundle). Serialised so a bulk upload can't burst the free ZeroGPU quota.
+// Failures land on `reconStatus: "failed"` — photo + SVG skeleton untouched.
+const reconInFlight = new Set<string>();
+let reconChain: Promise<void> = Promise.resolve();
 
-function compositeLaneCount(): number {
-  try {
-    const mem = (navigator as unknown as { deviceMemory?: number })?.deviceMemory;
-    if (typeof mem === "number" && mem <= 4) return 1;
-  } catch {
-    /* fall through to default */
-  }
-  return 2;
-}
-
-function runStudioCompositeJob(id: string): void {
-  if (studioCompositeInFlight.has(id) || studioCompositeQueue.includes(id)) return;
-  studioCompositeQueue.push(id);
-  pumpStudioCompositeQueue();
-}
-
-function pumpStudioCompositeQueue(): void {
-  while (
-    studioCompositeActive < compositeLaneCount() &&
-    studioCompositeQueue.length > 0
-  ) {
-    const next = studioCompositeQueue.shift()!;
-    if (studioCompositeInFlight.has(next)) continue;
-    const current = useAppStore.getState().garments.find((g) => g.id === next);
-    const source = current?.photo;
-    // Photo is the only input: nothing to segment (e.g. a manual entry
-    // with no photo, or a record whose base64 was stripped from storage)
-    // → leave the SVG fallback in place, don't mark failed.
-    if (!current || !source) continue;
-    studioCompositeInFlight.add(next);
-    studioCompositeActive++;
-    void runCompositeWorker(next).finally(() => {
-      studioCompositeActive--;
-      pumpStudioCompositeQueue();
-    });
-  }
-}
-
-async function runCompositeWorker(id: string): Promise<void> {
-  try {
-      const current = useAppStore.getState().garments.find((g) => g.id === id);
-      const source = current?.photo;
-      // Re-checked at worker start (a lane may have waited behind another):
-      // nothing to segment → SVG fallback carries on, never "failed".
-      if (!current || !source) return;
-      const { preprocessGarmentPhoto } = await import(
-        "../services/studioComposite"
-      );
-      const result = await preprocessGarmentPhoto(source);
-      if (result.status === "ready" && result.studio_composite) {
-        // Persist the blob to IndexedDB (fire-and-forget) — the lean
-        // localStorage snapshot no longer carries ~100 KB JPEGs, so this
-        // is what brings the composite back after a reload.
-        try {
-          saveBlob(id, "composite", result.studio_composite);
-        } catch {
-          /* best-effort */
-        }
-      }
-      useAppStore.setState((s) => {
-        const apply = (g: Garment): Garment =>
-          g.id === id
-            ? {
-                ...g,
-                ...(result.status === "ready" && result.studio_composite
-                  ? {
-                      studioComposite: result.studio_composite,
-                      studioCompositeStatus: "ready" as const,
-                    }
-                  : { studioCompositeStatus: "failed" as const }),
-              }
-            : g;
-        const fixOutfit = (o: Record<string, Garment | undefined>) => {
-          const next = { ...o };
-          for (const k of Object.keys(next)) {
-            const piece = next[k];
-            if (piece && piece.id === id) next[k] = apply(piece);
-          }
-          return next;
-        };
-        return {
-          garments: s.garments.map(apply),
-          looks: s.looks.map((l) => ({
-            ...l,
-            outfit: fixOutfit(l.outfit as Record<string, Garment | undefined>) as typeof l.outfit,
-          })),
-          today: s.today
-            ? {
-                ...s.today,
-                outfit: fixOutfit(s.today.outfit as Record<string, Garment | undefined>) as typeof s.today.outfit,
-              }
-            : s.today,
-        };
-      });
-    } catch (e) {
-      // Infallible by contract: offline, blocked WASM, corrupt input —
-      // anything lands here as "failed" and the SVG fallback carries on.
-      console.warn("studio-composite deferred:", e);
-      useAppStore.setState((s) => ({
-        garments: s.garments.map((g) =>
-          g.id === id ? { ...g, studioCompositeStatus: "failed" as const } : g
-        ),
-      }));
-    } finally {
-      studioCompositeInFlight.delete(id);
-      // Phase 4: chain the img2img enhance AFTER the composite lands, so
-      // the Space gets the isolated garment (not the raw photo) as input —
-      // still exactly one enhance call per garment, never per view.
-      // Flat-lay: chained too (composite-first input). Cost-gated inside —
-      // a free no-op unless VITE_ENABLE_FLATLAY_AI=true + budget remains.
-      try {
-        runStudioEnhanceJob(id);
-      } catch {
-        /* enhance kick is best-effort */
-      }
-      try {
-        runStudioFlatlayJob(id);
-      } catch {
-        /* flat-lay kick is best-effort */
-      }
+/** Patch one garment (and its look/today snapshot copies) by id. */
+function applyReconPatch(
+  s: { garments: Garment[]; looks: SavedLook[]; today: StyleResult | null },
+  id: string,
+  patch: Partial<Garment>
+): {
+  garments: Garment[];
+  looks: SavedLook[];
+  today: StyleResult | null;
+} {
+  const apply = (g: Garment): Garment => (g.id === id ? { ...g, ...patch } : g);
+  const fixOutfit = (o: Record<string, Garment | undefined>) => {
+    const next = { ...o };
+    for (const k of Object.keys(next)) {
+      const piece = next[k];
+      if (piece && piece.id === id) next[k] = apply(piece);
     }
-}
-
-/* ------------------- Phase 4 studio-enhance background jobs ------------- */
-// One img2img call per garment, at import time, via the secret-holding
-// Edge Function (never from the browser bundle). Serialised so a bulk
-// upload can't burst the free ZeroGPU quota (~5/day). Failures land on
-// `studioRenderStatus: "failed"` — SVG + composite fallbacks untouched.
-const studioEnhanceInFlight = new Set<string>();
-let studioEnhanceChain: Promise<void> = Promise.resolve();
-
-function runStudioEnhanceJob(id: string): void {
-  if (studioEnhanceInFlight.has(id)) return;
-  const snapshot = useAppStore.getState().garments.find((g) => g.id === id);
-  // No source to enhance (manual entry), or final already cached — never
-  // re-generate on view. Retry path re-enters via retryStudioRender.
-  if (!snapshot || snapshot.studioRenderUrl) return;
-  if (!snapshot.photo && !snapshot.studioComposite) return;
-  studioEnhanceInFlight.add(id);
-  studioEnhanceChain = studioEnhanceChain.then(async () => {
-    try {
-      const state = useAppStore.getState();
-      const current = state.garments.find((g) => g.id === id);
-      const user = state.user;
-      // Mock/demo mode or signed out: no backend to hold HF_TOKEN — stay
-      // on SVG + composite fallbacks, don't mark failed (retry later).
-      if (!current || !user || user.isDemo) return;
-      const { requestStudioEnhance } = await import(
-        "../services/studioEnhance"
-      );
-      const outcome = await requestStudioEnhance({
-        userId: user.id,
-        garmentId: id,
-        compositeDataUrl: current.studioComposite,
-        photoDataUrl: current.photo,
-      });
-      if (outcome.status === "ready") {
-        const url = outcome.studioRenderUrl;
-        useAppStore.setState((s) => {
-          const apply = (g: Garment): Garment =>
-            g.id === id
-              ? { ...g, studioRenderUrl: url, studioRenderStatus: "ready" as const }
-              : g;
-          const fixOutfit = (o: Record<string, Garment | undefined>) => {
-            const next = { ...o };
-            for (const k of Object.keys(next)) {
-              const piece = next[k];
-              if (piece && piece.id === id) next[k] = apply(piece);
-            }
-            return next;
-          };
-          return {
-            garments: s.garments.map(apply),
-            looks: s.looks.map((l) => ({
-              ...l,
-              outfit: fixOutfit(l.outfit as Record<string, Garment | undefined>) as typeof l.outfit,
-            })),
-            today: s.today
-              ? {
-                  ...s.today,
-                  outfit: fixOutfit(s.today.outfit as Record<string, Garment | undefined>) as typeof s.today.outfit,
-                }
-              : s.today,
-          };
-        });
-        // Best-effort row persist (retrySync backfills via upsert anyway).
-        try {
-          await supabase
-            ?.from("wardrobe_items")
-            .update({ studio_render_url: url })
-            .eq("id", id);
-        } catch {
-          /* background persist is best-effort */
+    return next;
+  };
+  return {
+    garments: s.garments.map(apply),
+    looks: s.looks.map((l) => ({
+      ...l,
+      outfit: fixOutfit(l.outfit as Record<string, Garment | undefined>) as typeof l.outfit,
+    })),
+    today: s.today
+      ? {
+          ...s.today,
+          outfit: fixOutfit(s.today.outfit as Record<string, Garment | undefined>) as typeof s.today.outfit,
         }
-      } else if (outcome.status === "failed") {
-        // API fail / timeout / function not deployed: don't block anything —
-        // save for retry from the Closet detail sheet.
-        console.warn("studio-enhance deferred:", outcome.error);
-        useAppStore.setState((s) => ({
-          garments: s.garments.map((g) =>
-            g.id === id ? { ...g, studioRenderStatus: "failed" as const } : g
-          ),
-        }));
-      }
-      // "skipped" (mock, no source): leave pending/undefined so a later
-      // live session can still enhance; SVG fallback carries on.
-    } catch (e) {
-      console.warn("studio-enhance deferred:", e);
-      useAppStore.setState((s) => ({
-        garments: s.garments.map((g) =>
-          g.id === id ? { ...g, studioRenderStatus: "failed" as const } : g
-        ),
-      }));
-    } finally {
-      studioEnhanceInFlight.delete(id);
-    }
-  });
+      : s.today,
+  };
 }
 
-/* ------------------- AI flat-lay background jobs ---------------------- */
-// FREE photo-faithful flat-lay via the TryOffDiffv2-MGT ZeroGPU Space
-// (see hf-tryoff/ + services/studioTryoff.ts). Hybrid trigger: auto-chained
-// after the composite (budgeted) + explicit manual tap. $0 inside the free
-// ZeroGPU quota — category gate + separate daily budget + serialised chain
-// so a bulk upload can't burst it. (The Gemini path in studioFlatlay.ts
-// stays dormant — billable, off by default, not wired to any trigger.)
-const studioFlatlayInFlight = new Set<string>();
-let studioFlatlayChain: Promise<void> = Promise.resolve();
-
-function runStudioFlatlayJob(id: string): void {
-  if (studioFlatlayInFlight.has(id)) return;
+function runReconJob(id: string): void {
+  if (reconInFlight.has(id)) return;
   const snapshot = useAppStore.getState().garments.find((g) => g.id === id);
-  // No source, or flat-lay already cached — never re-generate on view.
-  // Retry path re-enters via retryStudioFlatlay.
-  if (!snapshot || snapshot.studioFlatLay) return;
-  if (!snapshot.photo && !snapshot.studioComposite) return;
-  studioFlatlayInFlight.add(id);
-  studioFlatlayChain = studioFlatlayChain.then(async () => {
+  // No source to reconstruct (manual entry), or recon already cached —
+  // never re-generate on view. Retry path re-enters via retryRecon.
+  if (!snapshot || snapshot.reconUrl) return;
+  if (!snapshot.photo) return;
+  reconInFlight.add(id);
+  reconChain = reconChain.then(async () => {
     try {
       const state = useAppStore.getState();
       const current = state.garments.find((g) => g.id === id);
       if (!current) return;
-      const { requestStudioTryoff, tryoffClassFor } = await import(
-        "../services/studioTryoff"
+      const { analyzeGarmentPhoto, requestGarmentRecon } = await import(
+        "../services/garmentRecon"
       );
-      // Category gate BEFORE marking pending: shoes/accessories have no
-      // try-off model — free composite stays the finish, zero noise.
-      const garmentClass = tryoffClassFor(current.category);
-      if (!garmentClass) return;
-      useAppStore.setState((s) => ({
-        garments: s.garments.map((g) =>
-          g.id === id ? { ...g, studioFlatLayStatus: "pending" as const } : g
-        ),
-      }));
-      const outcome = await requestStudioTryoff({
+      // Analyzer gate BEFORE marking pending: shoes/accessories are
+      // photo-only (no recon model) — photo + SVG skeleton stay the
+      // finish, zero noise, zero quota.
+      const analysis = analyzeGarmentPhoto({
         garmentId: id,
-        garmentClass,
-        compositeDataUrl: current.studioComposite,
+        category: current.category,
+        name: current.name,
+      });
+      if (!analysis) return;
+      useAppStore.setState((s) => ({
+        ...applyReconPatch(s, id, { reconStatus: "pending" as const, reconError: undefined }),
+      }));
+      const renderer: "klein" | "tryoff" = current.hasPrint ? "klein" : "tryoff";
+      const outcome = await requestGarmentRecon({
+        garmentId: id,
+        reconClass: analysis.reconClass,
         photoDataUrl: current.photo,
+        // Hybrid router: print garments → Klein detail renderer, plain →
+        // TryOffDiff (Track 2 verdict — Klein keeps graphics but invents
+        // details on plain pieces, so the wearer decides via hasPrint).
+        renderer,
+        name: current.name,
       });
       if (outcome.status === "ready") {
-        const url = outcome.flatlayDataUrl;
+        const url = outcome.reconDataUrl;
         try {
-          const { saveBlob } = await import("../services/blobStore");
-          saveBlob(id, "flatlay", url);
+          saveBlob(id, "recon", url);
         } catch {
           /* best-effort */
         }
-        useAppStore.setState((s) => {
-          const apply = (g: Garment): Garment =>
-            g.id === id
-              ? { ...g, studioFlatLay: url, studioFlatLayStatus: "ready" as const }
-              : g;
-          const fixOutfit = (o: Record<string, Garment | undefined>) => {
-            const next = { ...o };
-            for (const k of Object.keys(next)) {
-              const piece = next[k];
-              if (piece && piece.id === id) next[k] = apply(piece);
-            }
-            return next;
-          };
-          return {
-            garments: s.garments.map(apply),
-            looks: s.looks.map((l) => ({
-              ...l,
-              outfit: fixOutfit(l.outfit as Record<string, Garment | undefined>) as typeof l.outfit,
-            })),
-            today: s.today
-              ? {
-                  ...s.today,
-                  outfit: fixOutfit(s.today.outfit as Record<string, Garment | undefined>) as typeof s.today.outfit,
-                }
-              : s.today,
-          };
-        });
-      } else if (outcome.status === "failed") {
-        console.warn("studio-flatlay deferred:", outcome.error);
         useAppStore.setState((s) => ({
-          garments: s.garments.map((g) =>
-            g.id === id ? { ...g, studioFlatLayStatus: "failed" as const } : g
-          ),
+          ...applyReconPatch(s, id, {
+            reconUrl: url,
+            reconStatus: "ready" as const,
+            reconError: undefined,
+            reconRenderer: renderer,
+          }),
+        }));
+      } else if (outcome.status === "failed") {
+        // API fail / timeout / function not deployed: don't block anything —
+        // save for retry from the Closet detail sheet.
+        console.warn("garment-recon deferred:", outcome.error);
+        useAppStore.setState((s) => ({
+          ...applyReconPatch(s, id, {
+            reconStatus: "failed" as const,
+            reconError: outcome.error,
+          }),
         }));
       } else {
-        // "skipped" (mock-mode / budget spent / function undeployed):
-        // clear the pending mark so the tile rests on free fallbacks with
-        // no pill — a later session can still run it.
+        // "skipped" (mock-mode / budget spent / no source): clear the
+        // pending mark so the tile rests on photo/SVG with no pill — a
+        // later session can still run it.
         useAppStore.setState((s) => ({
-          garments: s.garments.map((g) =>
-            g.id === id ? { ...g, studioFlatLayStatus: undefined } : g
-          ),
+          ...applyReconPatch(s, id, { reconStatus: undefined, reconError: undefined }),
         }));
       }
     } catch (e) {
-      console.warn("studio-flatlay deferred:", e);
+      console.warn("garment-recon deferred:", e);
       useAppStore.setState((s) => ({
-        garments: s.garments.map((g) =>
-          g.id === id ? { ...g, studioFlatLayStatus: "failed" as const } : g
-        ),
+        ...applyReconPatch(s, id, {
+          reconStatus: "failed" as const,
+          reconError: e instanceof Error ? e.message : String(e),
+        }),
       }));
     } finally {
-      studioFlatlayInFlight.delete(id);
+      reconInFlight.delete(id);
     }
   });
 }
 
-/* ------------------- Phase 5 closet-upgrade orchestrator -------------- */
-// Explicit opt-in rollout for pre-Phase-4 garments (never automatic —
-// auto-running would burst the ~5/day free ZeroGPU quota by surprise).
-// One kick per STUDIO_UPGRADE_PACE_MS via setTimeout (fully non-blocking:
-// the UI thread is free between ticks and the user keeps using the app).
-// Each kick reuses the exact Phase 1→4 pipeline: composite first when
-// missing (which chains the enhance on completion), else enhance direct.
-// Daily budget leaves headroom for fresh imports; hitting it parks the
-// run in "quota-paused" for the user to resume tomorrow.
-let upgradeTimer: ReturnType<typeof setTimeout> | null = null;
+/* Retired: runCompositeWorker (ISNet segmentation) — replaced by runReconJob. */
 
-function clearUpgradeTimer(): void {
-  if (upgradeTimer) {
-    clearTimeout(upgradeTimer);
-    upgradeTimer = null;
-  }
-}
+/* Retired: studio-enhance chain (FLUX-schnell re-light) — replaced by runReconJob. */
 
-/** Garments that can still be upgraded (have an image source, no final). */
-function eligibleUpgradeIds(garments: Garment[]): string[] {
-  return garments
-    .filter((g) => !g.studioRenderUrl && (g.photo || g.studioComposite))
-    .map((g) => g.id);
-}
+/* Retired: flat-lay chain (whole-image try-off caller) — replaced by runReconJob. */
+
+/* Retired: closet-upgrade orchestrator (bulk re-light rollout).
+ * The recon lane runs once per garment at import; failures retry per
+ * garment from the Closet detail sheet. No batch concept remains. */
 
 /**
  * Merge IndexedDB image blobs back into the lean in-memory state.
- * Never rejects: a missing blob just leaves the SVG/final fallback
+ * Never rejects: a missing blob just leaves the photo/SVG fallback
  * showing (always correct). Also backfills IDB from any in-state
- * `data:` blobs (first boot after the v10 persist slimming) and prunes
- * blobs for deleted garments. Await it before resuming pending jobs so
- * photo-gated resume sees its sources.
+ * `data:` blobs and prunes blobs for deleted garments. Await it before
+ * resuming pending jobs so photo-gated resume sees its sources.
  */
 async function rehydrateBlobs(): Promise<void> {
   try {
     const { loadAllBlobs } = await import("../services/blobStore").catch(
-      () => ({ loadAllBlobs: null as null | (() => Promise<Map<string, { photo?: string; composite?: string }>>) })
+      () => ({ loadAllBlobs: null as null | (() => Promise<Map<string, { photo?: string; recon?: string }>>) })
     );
     if (!loadAllBlobs) return;
     const all = await loadAllBlobs().catch(
-      () => new Map<string, { photo?: string; composite?: string }>()
+      () => new Map<string, { photo?: string; recon?: string }>()
     );
     const s = useAppStore.getState();
-    // Backfill the store from in-state blobs (v10 slimming leaves old
-    // snapshots carrying blobs in memory on first load).
+    // Backfill the store from in-state blobs (lean snapshots omit them).
     for (const g of s.garments) {
       if (g.photo?.startsWith("data:")) saveBlob(g.id, "photo", g.photo);
-      if (g.studioComposite?.startsWith("data:")) {
-        saveBlob(g.id, "composite", g.studioComposite);
-      }
-      if (g.studioFlatLay?.startsWith("data:")) {
-        saveBlob(g.id, "flatlay", g.studioFlatLay);
+      if (g.reconUrl?.startsWith("data:")) {
+        saveBlob(g.id, "recon", g.reconUrl);
       }
     }
     if (all.size > 0) {
@@ -717,12 +442,8 @@ async function rehydrateBlobs(): Promise<void> {
           next = { ...next, photo: pair.photo };
           changed = true;
         }
-        if (!next.studioComposite && pair.composite) {
-          next = { ...next, studioComposite: pair.composite };
-          changed = true;
-        }
-        if (!next.studioFlatLay && (pair as { flatlay?: string }).flatlay) {
-          next = { ...next, studioFlatLay: (pair as { flatlay?: string }).flatlay };
+        if (!next.reconUrl && pair.recon) {
+          next = { ...next, reconUrl: pair.recon, reconStatus: "ready" as const };
           changed = true;
         }
         return next;
@@ -735,118 +456,7 @@ async function rehydrateBlobs(): Promise<void> {
   }
 }
 
-function pumpClosetUpgrade(): void {
-  clearUpgradeTimer();
-  const state = useAppStore.getState();
-  const up = state.closetUpgrade;
-  if (up.status !== "running") return;
-  const user = state.user;
-  if (!user || user.isDemo) {
-    // No backend to hold HF_TOKEN — park, don't burn, don't fail.
-    useAppStore.setState((s) => ({
-      closetUpgrade: { ...s.closetUpgrade, status: "paused" as const, currentId: null },
-    }));
-    state.notify("Sign in to upgrade your closet", "err");
-    return;
-  }
-  // Drop ids that no longer need work (upgraded elsewhere, deleted, or
-  // source-less manual entries) — progress derives from initialIds so
-  // skipping never mis-counts.
-  const byId = new Map(state.garments.map((g) => [g.id, g]));
-  const remaining = up.queued.filter((id) => {
-    const g = byId.get(id);
-    return !!g && !g.studioRenderUrl && !!(g.photo || g.studioComposite);
-  });
-  if (remaining.length === 0) {
-    useAppStore.setState((s) => ({
-      closetUpgrade: {
-        ...s.closetUpgrade,
-        queued: [],
-        currentId: null,
-        status: "done" as const,
-        completedAt: Date.now(),
-      },
-    }));
-    state.notify("Closet upgrade complete");
-    return;
-  }
-  // Daily quota guard (local sanity counter; server quota is authoritative).
-  // Pause — don't fail — so the user resumes tomorrow with one tap.
-  // Paced via dynamic import so the enhance chunk stays out of the boot
-  // bundle; the tick itself is just a setTimeout (non-blocking).
-  import("../services/studioEnhance").then(
-    ({ getEnhanceDailyCount, STUDIO_UPGRADE_DAILY_BUDGET, STUDIO_UPGRADE_PACE_MS }) => {
-      const live = useAppStore.getState();
-      if (live.closetUpgrade.status !== "running") return;
-      if (getEnhanceDailyCount() >= STUDIO_UPGRADE_DAILY_BUDGET) {
-        useAppStore.setState((s) => ({
-          closetUpgrade: { ...s.closetUpgrade, status: "quota-paused" as const, currentId: null },
-        }));
-        live.notify("Daily studio budget reached — resume tomorrow", "err");
-        return;
-      }
-      const fresh = useAppStore.getState();
-      const fbyId = new Map(fresh.garments.map((g) => [g.id, g]));
-      const still = fresh.closetUpgrade.queued.filter((id) => {
-        const g = fbyId.get(id);
-        return !!g && !g.studioRenderUrl && !!(g.photo || g.studioComposite);
-      });
-      if (still.length === 0) {
-        useAppStore.setState((s) => ({
-          closetUpgrade: {
-            ...s.closetUpgrade,
-            queued: [],
-            currentId: null,
-            status: "done" as const,
-            completedAt: Date.now(),
-          },
-        }));
-        fresh.notify("Closet upgrade complete");
-        return;
-      }
-      const nextId = still[0];
-      const target = fbyId.get(nextId)!;
-      // Kick the same pipeline as a fresh upload: composite-first when
-      // missing (chains enhance on completion), enhance-direct otherwise.
-      // Mark pending so tiles show progress; failures land "failed" with
-      // the SVG fallback intact and never block the queue.
-      if (!target.studioComposite && target.photo) {
-        useAppStore.setState((s) => ({
-          garments: s.garments.map((g) =>
-            g.id === nextId
-              ? { ...g, studioCompositeStatus: "pending" as const, studioRenderStatus: "pending" as const }
-              : g
-          ),
-          closetUpgrade: {
-            ...s.closetUpgrade,
-            queued: still.slice(1),
-            currentId: nextId,
-          },
-        }));
-        runStudioCompositeJob(nextId);
-      } else {
-        useAppStore.setState((s) => ({
-          garments: s.garments.map((g) =>
-            g.id === nextId ? { ...g, studioRenderStatus: "pending" as const } : g
-          ),
-          closetUpgrade: {
-            ...s.closetUpgrade,
-            queued: still.slice(1),
-            currentId: nextId,
-          },
-        }));
-        runStudioEnhanceJob(nextId);
-      }
-      // Pace the next kick — non-blocking; the app stays fully usable.
-      upgradeTimer = setTimeout(pumpClosetUpgrade, STUDIO_UPGRADE_PACE_MS);
-    }
-  ).catch(() => {
-    // Dynamic import failed (offline?): retry this item on the next resume.
-    useAppStore.setState((s) => ({
-      closetUpgrade: { ...s.closetUpgrade, status: "paused" as const, currentId: null },
-    }));
-  });
-}
+/* Retired: pumpClosetUpgrade — no batch upgrade concept remains. */
 
 export const useAppStore = create<AppStore>()(
   persist(
@@ -886,8 +496,7 @@ export const useAppStore = create<AppStore>()(
             }
             const current = get().user;
             if (current && !current.isDemo) {
-              clearUpgradeTimer();
-              set({ user: null, ownerId: null, authStatus: "signedOut", ...EMPTY_DATA, closetUpgrade: { ...IDLE_UPGRADE } });
+              set({ user: null, ownerId: null, authStatus: "signedOut", ...EMPTY_DATA });
             }
           });
         } catch {
@@ -931,47 +540,26 @@ export const useAppStore = create<AppStore>()(
         retryTimer = setTimeout(() => {
           void get().retrySync().catch(() => {});
         }, 4000);
-        // Resume studio-composite jobs interrupted by a reload (persisted as
-        // "pending"): the SVG fallback is already on screen, the composite
-        // just enhances when it lands. Serialised by the job chain.
-        // Phase 4 enhance jobs resume the same way — but ONLY "pending"
-        // (a "failed" enhance waits for manual retry so a reload storm can
-        // never burst the ~5/day free quota).
-        // Phase 5 upgrade runs never auto-resume: a "running" snapshot from
-        // before the reload parks as "paused" so quota can't burn without
-        // an explicit tap. Individually-pending garments below still resume.
-        try {
-          const up = get().closetUpgrade;
-          if (up && up.status === "running") {
-            set({
-              closetUpgrade: { ...up, status: "paused" as const, currentId: null },
-            });
-          }
-        } catch {
-          /* upgrade park is best-effort */
-        }
-        // Blob sources first (lean v10 snapshots omit them): IDB reads are
+        // Blob sources first (lean snapshots omit them): IDB reads are
         // milliseconds-local, and photo-gated resume below needs them.
-        // Tiles already painted from SVG/final — this never blocks display.
+        // Tiles already painted from photo/SVG — this never blocks display.
         try {
           await rehydrateBlobs();
         } catch {
           /* rehydrate is best-effort */
         }
+        // Resume recon jobs interrupted by a reload (persisted as
+        // "pending"): the photo/SVG skeleton is already on screen, recon
+        // just lands when it completes. "failed" waits for manual retry so
+        // a reload storm can never burst the free quota.
         try {
           for (const g of get().garments) {
             if (
-              g.studioCompositeStatus === "pending" &&
-              g.photo &&
-              !g.studioComposite
+              g.reconStatus === "pending" &&
+              !g.reconUrl &&
+              g.photo
             ) {
-              runStudioCompositeJob(g.id);
-            } else if (
-              g.studioRenderStatus === "pending" &&
-              !g.studioRenderUrl &&
-              (g.studioComposite || g.photo)
-            ) {
-              runStudioEnhanceJob(g.id);
+              runReconJob(g.id);
             }
           }
         } catch {
@@ -1010,9 +598,6 @@ export const useAppStore = create<AppStore>()(
             errorGarments: new Set<string>(),
             errorLooks: new Set<string>(),
           };
-          // Upgrade queues belong to the previous account too — never leak
-          // one account's rollout into another's closet.
-          patch.closetUpgrade = { ...IDLE_UPGRADE };
         }
         set(patch);
         if (!user.isDemo && state.ownerId !== user.id) {
@@ -1099,7 +684,6 @@ export const useAppStore = create<AppStore>()(
       },
 
       signOutUser: async () => {
-        clearUpgradeTimer();
         await authSignOut();
         set({
           user: null,
@@ -1110,7 +694,6 @@ export const useAppStore = create<AppStore>()(
           tab: "home",
           stylePrefs: null,
           ...EMPTY_DATA,
-          closetUpgrade: { ...IDLE_UPGRADE },
           _syncState: {
             pendingGarments: new Set<string>(),
             pendingLooks: new Set<string>(),
@@ -1151,7 +734,6 @@ export const useAppStore = create<AppStore>()(
         errorGarments: new Set<string>(),
         errorLooks: new Set<string>(),
       },
-      closetUpgrade: { ...IDLE_UPGRADE },
 
       setTheme: (t) => {
         applyThemeToDom(t);
@@ -1215,27 +797,22 @@ export const useAppStore = create<AppStore>()(
 
         // The studio rendering was already generated + cached on the record
         // above (sync, infallible) — nothing to warm, nothing to await.
-        // The background-removed composite builds async alongside it: save
-        // first (never block the upload on ONNX), enhance right after. The
-        // original photo stays untouched; GarmentPhoto shows the SVG until
-        // the composite lands, then swaps automatically.
-        // Phase 4: the img2img final is marked pending here so the detail
-        // sheet can show progress, but the single enhance call fires from
-        // runStudioCompositeJob's completion (composite-first input). The
-        // upload itself never awaits any of it.
-        if (normalizedGarment.photo && !normalizedGarment.studioComposite) {
+        // Garment reconstruction builds async alongside it: save first
+        // (never block the upload on a remote call). The original photo
+        // stays untouched; GarmentPhoto shows photo/SVG until recon lands,
+        // then swaps automatically. The upload itself never awaits any of it.
+        if (normalizedGarment.photo && !normalizedGarment.reconUrl) {
           set((s) => ({
             garments: s.garments.map((garment) =>
               garment.id === id
                 ? {
                     ...garment,
-                    studioCompositeStatus: "pending" as const,
-                    studioRenderStatus: "pending" as const,
+                    reconStatus: "pending" as const,
                   }
                 : garment
             ),
           }));
-          runStudioCompositeJob(id);
+          runReconJob(id);
         }
         const user = get().user;
         if (!user || user.isDemo) {
@@ -1308,150 +885,62 @@ export const useAppStore = create<AppStore>()(
             : s.today,
         }));
       },
-      retryStudioComposite: (id) => {
-        // Manual (re)build from the DetailSheet: needs a photo to segment.
-        // Marks pending so GarmentPhoto can show progress, then runs the
-        // same serialised background job as the upload path.
+      retryRecon: (id) => {
+        // Manual retry for garment reconstruction (failed / never-ran).
+        // Needs a photo as input; skips when recon is cached or a job is
+        // in flight (one call per garment — quota guard). Pre-checks with
+        // notices: photo-only categories (shoes/extras have no recon model)
+        // and spent daily budget. Failures return to "failed" with
+        // photo/SVG fallbacks.
         const g = get().garments.find((x) => x.id === id);
-        if (
-          !g ||
-          !g.photo ||
-          studioCompositeInFlight.has(id) ||
-          studioCompositeQueue.includes(id)
-        )
-          return;
-        set((s) => ({
-          garments: s.garments.map((x) =>
-            x.id === id ? { ...x, studioCompositeStatus: "pending" as const } : x
-          ),
-        }));
-        runStudioCompositeJob(id);
-      },
-      retryStudioRender: (id) => {
-        // Manual retry for the Phase 4 img2img final (failed / never-ran).
-        // Needs a composite or photo as input; skips when the final is
-        // already cached or a job is in flight (one call per garment —
-        // quota guard). Failures return to "failed" with SVG fallback.
-        const g = get().garments.find((x) => x.id === id);
-        if (!g || g.studioRenderUrl || studioEnhanceInFlight.has(id)) return;
-        if (!g.studioComposite && !g.photo) return;
-        set((s) => ({
-          garments: s.garments.map((x) =>
-            x.id === id ? { ...x, studioRenderStatus: "pending" as const } : x
-          ),
-        }));
-        runStudioEnhanceJob(id);
-      },
-      retryStudioFlatlay: (id) => {
-        // Manual retry for the free AI flat-lay (failed / never-ran).
-        // Pre-checks with notices: unsupported category (shoes/extras keep
-        // the free composite finish) and spent daily budget. Mock mode /
-        // undeployed function flow through the job and land back on free
-        // fallbacks without noise.
-        const g = get().garments.find((x) => x.id === id);
-        if (!g || g.studioFlatLay || studioFlatlayInFlight.has(id)) return;
-        if (!g.studioComposite && !g.photo) return;
-        void import("../services/studioTryoff").then(
-          ({ tryoffClassFor, FLATLAY_TRYOFF_DAILY_BUDGET, getTryoffDailyCount }) => {
-            if (!tryoffClassFor(g.category)) {
-              get().notify("Free preview is the finish for shoes & extras", "err");
+        if (!g || g.reconUrl || reconInFlight.has(id)) return;
+        if (!g.photo) return;
+        void import("../services/garmentRecon").then(
+          ({ reconClassFor, RECON_DAILY_BUDGET, getReconDailyCount }) => {
+            if (!reconClassFor(g.category)) {
+              get().notify("Photo is the finish for shoes & extras", "err");
               return;
             }
-            if (getTryoffDailyCount() >= FLATLAY_TRYOFF_DAILY_BUDGET) {
-              get().notify("Today's free flat-lay budget is spent — try tomorrow", "err");
+            if (getReconDailyCount() >= RECON_DAILY_BUDGET) {
+              get().notify("Today's free recon budget is spent — try tomorrow", "err");
               return;
             }
-            runStudioFlatlayJob(id);
+            set((s) => ({
+              garments: s.garments.map((x) =>
+                x.id === id ? { ...x, reconStatus: "pending" as const } : x
+              ),
+            }));
+            runReconJob(id);
           }
         );
       },
+      setGarmentPrint: (id, hasPrint) => {
+        // Wearer-set renderer signal (logos/graphics/text → Klein).
+        // Clears any cached recon so the other renderer runs on demand;
+        // kicks a job immediately when a photo is present (same quota
+        // cost as a manual retry). No-op while a job is in flight — the
+        // flag still applies to the next run.
+        set((s) => ({
+          ...applyReconPatch(s, id, {
+            hasPrint,
+            reconUrl: undefined,
+            reconStatus: undefined,
+            reconError: undefined,
+            reconRenderer: undefined,
+          }),
+        }));
+        const g = get().garments.find((x) => x.id === id);
+        if (g?.photo && !reconInFlight.has(id)) runReconJob(id);
+      },
       /* ---------------- Phase 5 closet upgrade (opt-in) --------------- */
-      startClosetUpgrade: () => {
-        // Explicit opt-in only — never auto-started (quota surprise guard).
-        // Snapshots the eligible set, kicks the first item immediately for
-        // responsiveness, then paces the rest. Fully cancellable/resumable;
-        // the user keeps using the app between ticks.
-        const s = get();
-        const user = s.user;
-        if (!user || user.isDemo) {
-          s.notify("Sign in to upgrade your closet", "err");
-          return;
-        }
-        // Resume a paused run (keeps original total for stable progress).
-        if (
-          (s.closetUpgrade.status === "paused" ||
-            s.closetUpgrade.status === "quota-paused") &&
-          s.closetUpgrade.initialIds.length > 0
-        ) {
-          const still = s.closetUpgrade.queued.filter((id) =>
-            s.garments.some(
-              (g) => g.id === id && !g.studioRenderUrl && (g.photo || g.studioComposite)
-            )
-          );
-          // Re-top-up with garments added while paused (never duplicates).
-          const known = new Set([
-            ...s.closetUpgrade.initialIds,
-            ...still,
-          ]);
-          const fresh = eligibleUpgradeIds(s.garments).filter((id) => !known.has(id));
-          const initialIds = [...s.closetUpgrade.initialIds, ...fresh];
-          set({
-            closetUpgrade: {
-              ...s.closetUpgrade,
-              initialIds,
-              queued: [...still, ...fresh],
-              total: initialIds.length,
-              status: "running" as const,
-              currentId: null,
-              completedAt: null,
-            },
-          });
-          pumpClosetUpgrade();
-          return;
-        }
-        if (s.closetUpgrade.status === "running") return;
-        const ids = eligibleUpgradeIds(s.garments);
-        if (ids.length === 0) {
-          s.notify("Everything already has the studio finish");
-          return;
-        }
-        set({
-          closetUpgrade: {
-            status: "running" as const,
-            initialIds: ids,
-            queued: ids,
-            currentId: null,
-            total: ids.length,
-            startedAt: Date.now(),
-            completedAt: null,
-          },
-        });
-        s.notify(`Upgrading ${ids.length} item${ids.length > 1 ? "s" : ""} in the background`);
-        pumpClosetUpgrade();
-      },
-      pauseClosetUpgrade: () => {
-        clearUpgradeTimer();
-        const s = get();
-        if (s.closetUpgrade.status !== "running") return;
-        set({
-          closetUpgrade: { ...s.closetUpgrade, status: "paused" as const, currentId: null },
-        });
-      },
-      cancelClosetUpgrade: () => {
-        clearUpgradeTimer();
-        set({ closetUpgrade: { ...IDLE_UPGRADE } });
-      },
-      dismissClosetUpgrade: () => {
-        clearUpgradeTimer();
-        set({ closetUpgrade: { ...IDLE_UPGRADE } });
-      },
+      /* Retired: start/pause/cancel/dismissClosetUpgrade (bulk re-light
+       * rollout) — recon runs once per garment at import; per-garment
+       * retryRecon covers failures. */
       removeGarment: (id) => {
         const user = get().user;
         // Get userId for storage cleanup before removing from state
         const userId = user?.id;
-        // Drop any queued composite work + stored blobs for the garment.
-        const qIdx = studioCompositeQueue.indexOf(id);
-        if (qIdx >= 0) studioCompositeQueue.splice(qIdx, 1);
+        // Drop stored blobs for the garment.
         try {
           deleteBlobsFor(id);
         } catch {
@@ -1459,16 +948,6 @@ export const useAppStore = create<AppStore>()(
         }
         set((s) => ({
           garments: s.garments.filter((g) => g.id !== id),
-          closetUpgrade:
-            s.closetUpgrade.initialIds.includes(id) || s.closetUpgrade.queued.includes(id)
-              ? {
-                  ...s.closetUpgrade,
-                  initialIds: s.closetUpgrade.initialIds.filter((x) => x !== id),
-                  queued: s.closetUpgrade.queued.filter((x) => x !== id),
-                  total: Math.max(0, s.closetUpgrade.total - 1),
-                  currentId: s.closetUpgrade.currentId === id ? null : s.closetUpgrade.currentId,
-                }
-              : s.closetUpgrade,
           _syncState: {
             ...s._syncState,
             pendingGarments: without(toSet(s._syncState.pendingGarments), id),
@@ -1489,14 +968,12 @@ export const useAppStore = create<AppStore>()(
         get().notify("Sample closet loaded");
       },
       clearAllData: () => {
-        clearUpgradeTimer();
-        studioCompositeQueue.length = 0;
         try {
           clearBlobs();
         } catch {
           /* best-effort */
         }
-        set({ garments: [], looks: [], today: null, generation: IDLE_GEN, stylePrefs: null, closetUpgrade: { ...IDLE_UPGRADE } });
+        set({ garments: [], looks: [], today: null, generation: IDLE_GEN, stylePrefs: null });
         get().notify("Local data erased");
       },
 
@@ -1815,8 +1292,8 @@ export const useAppStore = create<AppStore>()(
       clearToast: () => set({ toast: null }),
     }),
     {
-      name: "fitflow-store",
-      version: 11,
+        name: "fitflow-store",
+        version: 12,
       storage: safeStorage,
       // Rehydrated _syncState arrives as string[] (see partialize); restore
       // Sets so every selector/mutator can treat them uniformly.
@@ -1838,16 +1315,6 @@ export const useAppStore = create<AppStore>()(
           (g): g is Record<string, unknown> =>
             !!g && typeof g === "object" && typeof (g as { id?: unknown }).id === "string"
         );
-        const validGarmentIds = new Set(
-          garments.map((g) => (g as { id: string }).id)
-        );
-        const upgradeRaw = (p.closetUpgrade ?? {}) as Record<string, unknown>;
-        const upgradeQueued = asArray(upgradeRaw.queued).filter(
-          (id): id is string => typeof id === "string" && validGarmentIds.has(id)
-        );
-        const upgradeInitial = asArray(upgradeRaw.initialIds).filter(
-          (id): id is string => typeof id === "string" && validGarmentIds.has(id)
-        );
         return {
           ...(c as object),
           ...(p as object),
@@ -1856,22 +1323,9 @@ export const useAppStore = create<AppStore>()(
           looks: asArray(p.looks),
           schedules: asArray(p.schedules),
           onboardedUsers: asArray(p.onboardedUsers),
-          closetUpgrade: {
-            ...IDLE_UPGRADE,
-            ...(typeof upgradeRaw === "object" ? upgradeRaw : {}),
-            initialIds: upgradeInitial,
-            queued: upgradeQueued,
-            // Never rehydrate mid-run: quota must not burn without a tap.
-            // A paused/quota-paused/done run survives (resumable); a
-            // "running" snapshot parks as paused.
-            status:
-              upgradeRaw.status === "paused" ||
-              upgradeRaw.status === "quota-paused" ||
-              upgradeRaw.status === "done"
-                ? upgradeRaw.status
-                : ("idle" as const),
-            currentId: null,
-          },
+          // Retired slices never rehydrate: closetUpgrade (bulk rollout),
+          // studioComposite/studioRenderUrl/studioFlatLay (old pipeline).
+          // Garments carrying them are scrubbed in the v12 migration below.
           _syncState: {
             pendingGarments: toSet(sync.pendingGarments),
             pendingLooks: toSet(sync.pendingLooks),
@@ -2058,65 +1512,104 @@ export const useAppStore = create<AppStore>()(
               : (state as any).today,
           };
         }
-        // v8 → v9 (Phase 5): closet-upgrade queue is explicit opt-in state.
-        // Old snapshots predate it — initialise idle. A "running" snapshot
-        // (reload mid-run) parks as "paused" so quota can't burn without a
-        // fresh tap; queued ids are re-validated against live garments.
+        // v8 → v9 (Phase 5): closet-upgrade queue was explicit opt-in
+        // state. Retired with the recon rewrite — drop the whole slice.
         if (version < 9) {
-          const prev = (state as any).closetUpgrade as
-            | ClosetUpgradeState
-            | undefined;
-          const garmentIds = new Set(
-            (((state as any).garments ?? []) as Array<{ id: string }>).map((g) => g.id)
-          );
-          if (!prev || typeof prev !== "object") {
-            state = { ...state, closetUpgrade: { ...IDLE_UPGRADE } };
-          } else {
-            const queued = (prev.queued ?? []).filter((id: string) => garmentIds.has(id));
-            const initialIds = (prev.initialIds ?? []).filter((id: string) =>
-              garmentIds.has(id)
-            );
-            state = {
-              ...state,
-              closetUpgrade: {
-                ...IDLE_UPGRADE,
-                initialIds,
-                queued,
-                total: prev.total ?? initialIds.length,
-                startedAt: prev.startedAt ?? null,
-                status:
-                  prev.status === "running" ? ("paused" as const) : (prev.status ?? "idle"),
-              },
-            };
-          }
+          const { closetUpgrade: _u, ...rest } = state as Record<string, unknown>;
+          void _u;
+          state = rest;
         }
         // v9 → v10 (speed): image blobs moved to IndexedDB — localStorage
         // snapshots no longer carry them. Nothing to transform: in-memory
         // blobs backfill IDB at boot (rehydrateBlobs) and the next persist
-        // write slims itself. Park a mid-run upgrade as paused (same quota
-        // rule as before).
+        // write slims itself. (Upgrade-park step retired with v8→v9.)
         if (version < 10) {
-          const prev = (state as any).closetUpgrade as
-            | ClosetUpgradeState
-            | undefined;
-          if (prev && typeof prev === "object" && prev.status === "running") {
-            state = {
-              ...state,
-              closetUpgrade: { ...prev, status: "paused" as const, currentId: null },
-            };
-          }
+          const { closetUpgrade: _u, ...rest } = state as Record<string, unknown>;
+          void _u;
+          state = rest;
         }
-        // v10 → v11: photo-faithful AI flat-lay fields. Old snapshots
-        // predate them — initialise idle (never "pending": no phantom
-        // progress, no surprise cost on reload).
+        // v10 → v11: photo-faithful AI flat-lay fields (retired). Strip
+        // them so no snapshot carries dead rendering state.
         if (version < 11) {
+          const stripDead = (g: any) => {
+            if (!g || typeof g !== "object") return g;
+            const {
+              studioFlatLay: _f,
+              studioFlatLayStatus: _fs,
+              studioComposite: _c,
+              studioCompositeStatus: _cs,
+              studioRenderUrl: _r,
+              studioRenderStatus: _rs,
+              ...rest
+            } = g;
+            void _f;
+            void _fs;
+            void _c;
+            void _cs;
+            void _r;
+            void _rs;
+            return rest;
+          };
           state = {
             ...state,
-            garments: ((state as any).garments ?? []).map((g: any) => ({
-              ...g,
-              studioFlatLay: g.studioFlatLay ?? undefined,
-              studioFlatLayStatus: g.studioFlatLay ? "ready" : undefined,
+            garments: ((state as any).garments ?? []).map(stripDead),
+          };
+        }
+        // v11 → v12 (recon rewrite): single source of truth. Strip ALL
+        // old-pipeline rendering fields from live garments AND snapshots;
+        // initialise recon state idle (never "pending": no phantom
+        // progress, no surprise quota on reload). Boot resumes genuinely
+        // pending recon jobs; failed ones wait for manual retryRecon.
+        if (version < 12) {
+          const stripDead = (g: any) => {
+            if (!g || typeof g !== "object") return g;
+            const {
+              studioFlatLay: _f,
+              studioFlatLayStatus: _fs,
+              studioComposite: _c,
+              studioCompositeStatus: _cs,
+              studioRenderUrl: _r,
+              studioRenderStatus: _rs,
+              ...rest
+            } = g;
+            void _f;
+            void _fs;
+            void _c;
+            void _cs;
+            void _r;
+            void _rs;
+            return {
+              ...rest,
+              reconUrl: (rest as any).reconUrl ?? undefined,
+              reconStatus:
+                (rest as any).reconStatus === "ready" &&
+                (rest as any).reconUrl
+                  ? "ready"
+                  : undefined,
+              reconError: undefined,
+            };
+          };
+          const stripOutfit = (o: any) => {
+            if (!o || typeof o !== "object") return o;
+            const next = { ...o };
+            for (const k of Object.keys(next)) next[k] = stripDead(next[k]);
+            return next;
+          };
+          const { closetUpgrade: _u, ...noUpgrade } = state as Record<string, unknown>;
+          void _u;
+          state = {
+            ...noUpgrade,
+            garments: (((noUpgrade as any).garments ?? []) as any[]).map(stripDead),
+            looks: (((noUpgrade as any).looks ?? []) as any[]).map((l: any) => ({
+              ...l,
+              outfit: stripOutfit(l.outfit),
             })),
+            today: (noUpgrade as any).today
+              ? {
+                  ...(noUpgrade as any).today,
+                  outfit: stripOutfit((noUpgrade as any).today.outfit),
+                }
+              : (noUpgrade as any).today,
           };
         }
         return state as never;
@@ -2125,21 +1618,17 @@ export const useAppStore = create<AppStore>()(
         theme: s.theme,
         units: s.units,
         // Lean snapshots: image blobs live in IndexedDB (see blobStore),
-        // never in localStorage. A 40-item closet of ~100 KB composites is
-        // ~4 MB of JSON stringify/parse on EVERY store write — jank plus a
-        // quota wall. SVG `rendering` + `studioRenderUrl` strings (a few KB
-        // each) stay: tiles paint instantly from this snapshot alone, and
-        // blobs merge back silently at boot (rehydrateBlobs).
+        // never in localStorage. SVG `rendering` strings (a few KB each)
+        // stay: tiles paint instantly from this snapshot alone, and blobs
+        // merge back silently at boot (rehydrateBlobs). Recon URL strings
+        // stay too (small); recon bytes live in IndexedDB.
         garments: s.garments.map((g) => ({
           ...g,
           photo: undefined,
-          studioComposite: undefined,
-          studioFlatLay: undefined,
         })),
         // Snapshots carry the SVG rendering as their display image; photo
-        // sources + ~100 KB studio-composite JPEGs would multiply
-        // localStorage usage per snapshot and risk quota failure. Live
-        // garments keep their blobs in IndexedDB instead.
+        // sources would multiply localStorage usage per snapshot and risk
+        // quota failure. Live garments keep their blobs in IndexedDB instead.
         looks: s.looks.map((l) => ({
           ...l,
           outfit: Object.fromEntries(
@@ -2149,10 +1638,6 @@ export const useAppStore = create<AppStore>()(
                 ? {
                     ...g,
                     photo: undefined,
-                    studioComposite: undefined,
-                    studioCompositeStatus: undefined,
-                    studioFlatLay: undefined,
-                    studioFlatLayStatus: undefined,
                   }
                 : g,
             ])
@@ -2169,10 +1654,6 @@ export const useAppStore = create<AppStore>()(
                     ? {
                         ...g,
                         photo: undefined,
-                        studioComposite: undefined,
-                        studioCompositeStatus: undefined,
-                        studioFlatLay: undefined,
-                        studioFlatLayStatus: undefined,
                       }
                     : g,
                 ])
@@ -2189,12 +1670,7 @@ export const useAppStore = create<AppStore>()(
           errorGarments: Array.from(toSet(s._syncState.errorGarments)),
           errorLooks: Array.from(toSet(s._syncState.errorLooks)),
         },
-        // Phase 5 upgrade queue (small id arrays — safe for localStorage).
-        // Persisted so progress survives a reload; a "running" snapshot is
-        // parked as "paused" on rehydrate + boot (explicit resume only).
-        closetUpgrade: s.closetUpgrade.status === "running"
-          ? { ...s.closetUpgrade, status: "paused" as const, currentId: null }
-          : s.closetUpgrade,
+        // No batch-upgrade slice remains (retired with the recon rewrite).
       }),
     }
   )

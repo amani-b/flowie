@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Camera, Check, Loader2, Plus, RotateCcw, Search, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Camera, Loader2, Plus, RotateCcw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { CATEGORIES } from "../lib/mock";
 import {
@@ -17,6 +17,7 @@ import GarmentPhoto from "../components/GarmentPhoto";
 import Sheet from "../components/Sheet";
 import { LogoMark } from "../components/icons";
 import { tagGarmentPhoto, taggingToGarment, withTimeout, type TaggingResult } from "../services/aiStylistService";
+import { reconClassFor } from "../services/garmentRecon";
 
 type Filter = "all" | Category;
 
@@ -634,9 +635,8 @@ function AddForm({ onDone }: { onDone: () => void }) {
 
 function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: () => void }) {
   const removeGarment = useAppStore((s) => s.removeGarment);
-  const retryStudioComposite = useAppStore((s) => s.retryStudioComposite);
-  const retryStudioRender = useAppStore((s) => s.retryStudioRender);
-  const retryStudioFlatlay = useAppStore((s) => s.retryStudioFlatlay);
+  const retryRecon = useAppStore((s) => s.retryRecon);
+  const setGarmentPrint = useAppStore((s) => s.setGarmentPrint);
   const notify = useAppStore((s) => s.notify);
   const [confirmDel, setConfirmDel] = useState(false);
 
@@ -659,87 +659,65 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
           <div className="relative h-56 overflow-hidden rounded-[20px]">
             <GarmentPhoto garment={g} eager />
           </div>
-          {/* Background-removal composite state: built on-device at upload,
-              original photo is never altered. Legacy / interrupted records
-              get an explicit opt-in retry — never a silent substitution. */}
-          {g.studioCompositeStatus === "ready" && g.studioComposite ? (
+          {/* Garment reconstruction: one remote call per garment at import;
+              the photo/SVG skeleton always shows when this hasn't run or
+              failed. Manual retry only — never auto-retried, to respect the
+              free quota. Hybrid router: the wearer flags print garments
+              (logos/graphics/text) for the detail renderer; plain pieces
+              stay on the default backend. Toggling re-runs reconstruction
+              (one extra quota call) when a photo is present. */}
+          {g.reconUrl && g.reconStatus === "ready" ? (
             <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
-              <Sparkles className="h-3.5 w-3.5 text-acc" /> Studio clean · background removed
+              <Sparkles className="h-3.5 w-3.5 text-acc" /> Reconstructed · true to your photo
+              {g.reconRenderer === "klein" ? " · detail render" : ""}
             </p>
-          ) : g.studioCompositeStatus === "pending" ? (
+          ) : g.reconStatus === "pending" ? (
             <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-acc" /> Cleaning background…
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-acc" /> Reconstructing… photo showing
             </p>
-          ) : g.photo ? (
+          ) : g.photo && !g.reconUrl ? (
             <div className="flex items-center justify-between gap-2 rounded-[14px] border border-line px-3.5 py-2.5">
               <p className="text-[11px] font-bold leading-snug text-mut">
-                {g.studioCompositeStatus === "failed"
-                  ? "Background cleanup didn’t finish — original kept."
-                  : "Isolate this piece on the clean studio backdrop."}
+                {g.reconStatus === "failed"
+                  ? `Reconstruction didn’t run${g.reconError ? ` — ${g.reconError}` : ""} — photo kept. Retry when quota allows.`
+                  : "Rebuild this as a clean standalone garment — free, one-time."}
               </p>
               <button
-                onClick={() => retryStudioComposite(g.id)}
+                onClick={() => retryRecon(g.id)}
                 className="flex shrink-0 items-center gap-1.5 rounded-full bg-acc px-3 py-1.5 text-[11px] font-extrabold text-accink transition active:scale-95"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
-                {g.studioCompositeStatus === "failed" ? "Try again" : "Clean background"}
+                {g.reconStatus === "failed" ? "Try again" : "Reconstruct"}
               </button>
             </div>
           ) : null}
-          {/* Free photo-faithful AI flat-lay (TryOffDiffv2-MGT ZeroGPU):
-              same garment rebuilt top-down. Shoes/extras have no try-off
-              model and keep the free composite finish. Quota-safe: budgeted
-              auto-run + explicit tap only, free fallbacks always intact. */}
-          {g.studioFlatLay && g.studioFlatLayStatus === "ready" ? (
-            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
-              <Sparkles className="h-3.5 w-3.5 text-acc" /> AI flat-lay · true to your photo
-            </p>
-          ) : g.studioFlatLayStatus === "pending" ? (
-            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-acc" /> Laying flat… free preview showing
-            </p>
-          ) : (g.studioComposite || g.photo) && !g.studioFlatLay ? (
-            <div className="flex items-center justify-between gap-2 rounded-[14px] border border-line px-3.5 py-2.5">
-              <p className="text-[11px] font-bold leading-snug text-mut">
-                {g.studioFlatLayStatus === "failed"
-                  ? "Flat-lay didn’t run — free preview kept. Retry anytime."
-                  : "Rebuild this as a clean top-down flat-lay — free."}
-              </p>
-              <button
-                onClick={() => retryStudioFlatlay(g.id)}
-                className="flex shrink-0 items-center gap-1.5 rounded-full bg-acc px-3 py-1.5 text-[11px] font-extrabold text-accink transition active:scale-95"
+          {g.photo && reconClassFor(g.category) ? (
+            <button
+              onClick={() => g.reconStatus !== "pending" && setGarmentPrint(g.id, !g.hasPrint)}
+              aria-pressed={!!g.hasPrint}
+              disabled={g.reconStatus === "pending"}
+              className="flex w-full items-center justify-between gap-2 rounded-[14px] border border-line px-3.5 py-2.5 text-left transition active:scale-[0.99] disabled:opacity-60"
+            >
+              <span>
+                <span className="block text-[11px] font-extrabold text-ink">
+                  Logos, graphics or text {g.hasPrint ? "· on" : "· off"}
+                </span>
+                <span className="block text-[11px] font-bold leading-snug text-mut">
+                  {g.hasPrint
+                    ? "Detail renderer keeps prints legible — slower, ~60 s."
+                    : "Default renderer for plain garments — faster, ~30 s."}
+                  {g.reconUrl ? " Toggling rebuilds the image." : ""}
+                </span>
+              </span>
+              <span
+                aria-hidden
+                className={`relative h-5 w-9 shrink-0 rounded-full transition ${g.hasPrint ? "bg-acc" : "bg-line"}`}
               >
-                <Sparkles className="h-3.5 w-3.5" />
-                {g.studioFlatLayStatus === "failed" ? "Try again" : "Flat-lay"}
-              </button>
-            </div>
-          ) : null}
-          {/* Phase 4 img2img final: one call per garment at import; the SVG
-              fallback always shows when this hasn't run or failed. Manual
-              retry only — never auto-retried, to respect the free quota. */}
-          {g.studioRenderUrl && g.studioRenderStatus === "ready" ? (
-            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
-              <Wand2 className="h-3.5 w-3.5 text-acc" /> Studio finish · AI re-light
-            </p>
-          ) : g.studioRenderStatus === "pending" ? (
-            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-acc" /> Studio finish queued… SVG showing
-            </p>
-          ) : (g.studioComposite || g.photo) && !g.studioRenderUrl ? (
-            <div className="flex items-center justify-between gap-2 rounded-[14px] border border-line px-3.5 py-2.5">
-              <p className="text-[11px] font-bold leading-snug text-mut">
-                {g.studioRenderStatus === "failed"
-                  ? "Studio finish didn’t run — SVG fallback kept. Retry when quota allows."
-                  : "Upgrade this piece to the AI studio finish (one-time)."}
-              </p>
-              <button
-                onClick={() => retryStudioRender(g.id)}
-                className="flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11px] font-extrabold text-mut transition active:scale-95"
-              >
-                <Wand2 className="h-3.5 w-3.5" />
-                {g.studioRenderStatus === "failed" ? "Retry finish" : "Try studio finish"}
-              </button>
-            </div>
+                <span
+                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${g.hasPrint ? "left-[18px]" : "left-0.5"}`}
+                />
+              </span>
+            </button>
           ) : null}
           {g.photo && (
             <details className="rounded-[14px] border border-line px-3.5 py-2.5">
@@ -795,145 +773,6 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
         </div>
       )}
     </Sheet>
-  );
-}
-
-/* --------------------------- upgrade banner --------------------------- */
-
-/**
- * Phase 5 rollout — explicit opt-in "Upgrade my closet" banner.
- *
- * Recommendation rationale: an automatic background sweep would burst the
- * ~5/day free ZeroGPU quota by surprise on a 40-item closet. An explicit
- * button keeps the cost visible and consenting: one kick per minute,
- * max ~4 enhance calls per day (headroom left for fresh imports), fully
- * pausable/cancellable, progress persisted across reloads. The user keeps
- * using the app between ticks — each tick is a single setTimeout kick
- * into the existing serial Phase 1→4 chains, never a blocking await.
- */
-function UpgradeBanner() {
-  const garments = useAppStore((s) => s.garments);
-  const user = useAppStore((s) => s.user);
-  const upgrade = useAppStore((s) => s.closetUpgrade);
-  const start = useAppStore((s) => s.startClosetUpgrade);
-  const pause = useAppStore((s) => s.pauseClosetUpgrade);
-  const cancel = useAppStore((s) => s.cancelClosetUpgrade);
-  const dismiss = useAppStore((s) => s.dismissClosetUpgrade);
-
-  // Demo/mock mode has no backend to hold HF_TOKEN — upgrade is live-only.
-  if (!user || user.isDemo) return null;
-
-  const eligible = garments.filter(
-    (g) => !g.studioRenderUrl && (g.photo || g.studioComposite)
-  ).length;
-
-  const status = upgrade.status;
-  const total = upgrade.total;
-
-  // Idle: invite only when there's something to upgrade.
-  if (status === "idle") {
-    if (eligible === 0 || garments.length === 0) return null;
-    return (
-      <div className="card mt-4 flex items-center justify-between gap-3 rounded-[20px] px-4 py-3.5">
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-[13px] font-extrabold">
-            <Wand2 className="h-4 w-4 text-acc" /> {eligible} item{eligible > 1 ? "s" : ""} can get the studio finish
-          </p>
-          <p className="mt-0.5 text-[11px] font-medium leading-snug text-mut">
-            Runs in the background · ~1/min · max 4/day · keep using the app
-          </p>
-        </div>
-        <button
-          onClick={start}
-          className="flex shrink-0 items-center gap-1.5 rounded-full bg-acc px-4 py-2 text-[12.5px] font-extrabold text-accink transition active:scale-95"
-        >
-          <Wand2 className="h-4 w-4" /> Upgrade my closet
-        </button>
-      </div>
-    );
-  }
-
-  // Done: confirm + dismiss (derived count guards against deletions).
-  if (status === "done") {
-    return (
-      <div className="card mt-4 flex items-center justify-between gap-3 rounded-[20px] px-4 py-3.5">
-        <p className="flex items-center gap-1.5 text-[13px] font-extrabold">
-          <Check className="h-4 w-4 text-acc" /> Closet upgraded
-          {total > 0 && <span className="text-mut">· {total} items</span>}
-        </p>
-        <button
-          onClick={dismiss}
-          className="flex shrink-0 items-center gap-1 rounded-full border border-line px-3 py-1.5 text-[11.5px] font-extrabold text-mut transition active:scale-95"
-          aria-label="Dismiss upgrade complete"
-        >
-          <X className="h-3.5 w-3.5" /> Dismiss
-        </button>
-      </div>
-    );
-  }
-
-  // Running / paused / quota-paused: live progress from the snapshot set.
-  const byId = new Map(garments.map((g) => [g.id, g]));
-  const upgraded = upgrade.initialIds.filter((id) => byId.get(id)?.studioRenderUrl).length;
-  const denom = Math.max(1, total);
-  const pct = Math.min(100, Math.round((upgraded / denom) * 100));
-
-  return (
-    <div className="card mt-4 space-y-2.5 rounded-[20px] px-4 py-3.5">
-      <div className="flex items-center justify-between gap-2">
-        <p className="flex min-w-0 items-center gap-1.5 text-[13px] font-extrabold">
-          {status === "running" ? (
-            <Loader2 className="h-4 w-4 animate-spin text-acc" />
-          ) : (
-            <Wand2 className="h-4 w-4 text-acc" />
-          )}
-          <span className="truncate">
-            {upgraded} of {total} upgraded
-            {status === "paused" && " · paused"}
-            {status === "quota-paused" && " · daily budget reached"}
-          </span>
-        </p>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {status === "running" ? (
-            <button
-              onClick={pause}
-              className="rounded-full border border-line px-3 py-1.5 text-[11.5px] font-extrabold text-mut transition active:scale-95"
-            >
-              Pause
-            </button>
-          ) : (
-            <button
-              onClick={start}
-              className="flex items-center gap-1 rounded-full bg-acc px-3 py-1.5 text-[11.5px] font-extrabold text-accink transition active:scale-95"
-            >
-              <Wand2 className="h-3.5 w-3.5" /> Resume
-            </button>
-          )}
-          <button
-            onClick={cancel}
-            className="rounded-full border border-line px-2.5 py-1.5 text-[11.5px] font-extrabold text-mut transition active:scale-95"
-            aria-label="Stop closet upgrade"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-      <div className="h-2 overflow-hidden rounded-full bg-bgdeep">
-        <motion.div
-          className="h-full bg-acc"
-          initial={false}
-          animate={{ width: `${pct}%` }}
-          transition={{ ease: "easeOut", duration: 0.4 }}
-        />
-      </div>
-      <p className="text-[11px] font-medium leading-snug text-mut">
-        {status === "quota-paused"
-          ? "Free studio budget used for today — resume tomorrow to continue where you left off."
-          : status === "paused"
-            ? "Paused — your progress is saved. Nothing runs until you resume."
-            : "Upgrading in the background — keep using the app normally."}
-      </p>
-    </div>
   );
 }
 
@@ -1002,7 +841,6 @@ export default function Closet() {
         </motion.div>
       ) : (
         <>
-          <UpgradeBanner />
           <div className="relative mt-4">
             <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-mut" />
             <input

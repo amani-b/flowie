@@ -12,20 +12,16 @@ export const BOARD_TILE_BG =
 
 /**
  * One garment's display image, best-first:
- * 1. the photo-faithful AI flat-lay (`studioFlatLay`, cost-gated opt-in —
- *    same garment rebuilt top-down, see services/studioFlatlay.ts);
- * 2. the Phase 4 img2img final (`studioRenderUrl`, built ONCE at import
- *    via the enhance-garment Edge Function — same garment, studio re-light);
- * 3. the background-removed neutral-backdrop composite (`studioComposite`,
- *    built on-device at upload time — the real garment, isolated and
- *    centered on the studio sweep);
- * 4. the cached procedural SVG studio rendering (instant, deterministic
- *    fallback — same backdrop palette, so swaps are seamless).
+ * 1. the reconstruction final (`reconUrl`, built ONCE at import via the
+ *    recon-garment Edge Function — the complete empty garment);
+ * 2. the original photo (always present for photo garments);
+ * 3. the cached procedural SVG skeleton (instant, deterministic —
+ *    same backdrop palette, so swaps are seamless).
  *
- * The SVG renders synchronously, so pending enhance/composite jobs never
- * block the tile: the rendering shows immediately with a small progress
- * pill, then each better source swaps in when it lands. Failures are
- * silent here (SVG carries on) — retries live in the Closet detail sheet.
+ * The SVG renders synchronously, so pending recon jobs never block the
+ * tile: the skeleton shows immediately with a small progress pill, then
+ * the recon swaps in when it lands. Failures are silent here (photo/SVG
+ * carry on) — retries live in the Closet detail sheet.
  */
 export default function GarmentPhoto({
   garment,
@@ -41,21 +37,12 @@ export default function GarmentPhoto({
   const [retryTick, setRetryTick] = useState(0);
 
   const status = garment.renderStatus ?? (garment.rendering ? "ready" : "pending");
-  // A "failed" composite/enhance/flat-lay is discarded for display (the SVG
-  // is the honest finished state); "pending" keeps showing the SVG underneath.
-  // Precedence: AI flat-lay > studio_render_url final > composite > SVG.
-  const flatlay =
-    garment.studioFlatLayStatus === "failed" ? undefined : garment.studioFlatLay;
-  const final =
-    garment.studioRenderStatus === "failed" ? undefined : garment.studioRenderUrl;
-  const composite =
-    garment.studioCompositeStatus === "failed" ? undefined : garment.studioComposite;
-  const flatlayPending =
-    garment.studioFlatLayStatus === "pending" && !flatlay;
-  const compositePending =
-    garment.studioCompositeStatus === "pending" && !composite && !final && !flatlay;
-  const enhancePending =
-    garment.studioRenderStatus === "pending" && !final && !flatlay;
+  // A "failed" recon is discarded for display (photo/SVG is the honest
+  // finished state); "pending" keeps showing photo/SVG underneath.
+  const recon =
+    garment.reconStatus === "failed" ? undefined : garment.reconUrl;
+  const reconPending =
+    garment.reconStatus === "pending" && !recon;
 
   // Legacy records that predate cached renderings: generate once, store on
   // the record (and its look snapshots), then display. One effect, one write.
@@ -68,7 +55,7 @@ export default function GarmentPhoto({
 
   useEffect(() => {
     setFailed(false);
-  }, [garment.id, garment.rendering, composite, final, flatlay, retryTick]);
+  }, [garment.id, garment.rendering, garment.photo, recon, retryTick]);
 
   if (status === "failed" || failed) {
     return (
@@ -111,13 +98,13 @@ export default function GarmentPhoto({
   }
 
   // Last-resort inline derivation (should already be cached on the record).
-  // The AI flat-lay wins when ready, then the img2img final, then the
-  // composite — same 4:5 frame and backdrop palette, so grids stay uniform
-  // whichever source is showing.
+  // Recon wins when ready, then the original photo, then the SVG skeleton —
+  // same frame and backdrop palette, so grids stay uniform whichever source
+  // is showing.
   // renderingFor never throws (normalises corrupt records), but the tile is
   // additionally isolated: one poisoned garment shows a fallback tile
   // instead of erasing the whole screen via the top boundary.
-  const src = flatlay ?? final ?? composite ?? garment.rendering ?? renderingFor(garment);
+  const src = recon ?? garment.photo ?? garment.rendering ?? renderingFor(garment);
 
   return (
     <ErrorBoundary
@@ -140,7 +127,7 @@ export default function GarmentPhoto({
       style={{ background: BOARD_TILE_BG }}
     >
       <img
-        key={`${garment.id}-${flatlay ? "flatlay" : final ? "final" : composite ? "composite" : "render"}-${retryTick}`}
+        key={`${garment.id}-${recon ? "recon" : garment.photo ? "photo" : "render"}-${retryTick}`}
         src={src}
         alt={garment.name}
         loading={eager ? "eager" : "lazy"}
@@ -148,10 +135,9 @@ export default function GarmentPhoto({
         onError={() => setFailed(true)}
         className={cn("h-full w-full object-cover", imgClassName)}
       />
-      {(flatlayPending || compositePending || enhancePending) && (
+      {reconPending && (
         <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-black/45 px-2 py-1 text-[9px] font-extrabold uppercase tracking-[0.12em] text-white backdrop-blur-sm">
-          <Loader2 className="h-3 w-3 animate-spin" />{" "}
-          {flatlayPending ? "Laying flat…" : enhancePending && !compositePending ? "Styling…" : "Cleaning…"}
+          <Loader2 className="h-3 w-3 animate-spin" /> Reconstructing…
         </span>
       )}
     </div>

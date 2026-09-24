@@ -39,39 +39,30 @@ export interface Garment {
   kind?: AccessoryKind; // only for accessories
   photo?: string; // compressed data-URL (max ~1MB) — source only, never displayed as the finished look
   /**
-   * Opt-in "studio_composite" version (JPEG data URL, 768×1024): the original
-   * photo background-removed and composited onto the neutral studio backdrop
-   * with a soft drop shadow (see services/studioComposite.ts). Built
-   * automatically on-device for every upload carrying a photo; local-only,
-   * not synced — like patternMix. `rendering` (SVG) stays the instant
-   * fallback underneath and wins only until the composite is ready.
+   * Reconstruction final (PNG data URL, 512×512): the complete empty
+   * garment rebuilt from the original photo by the recon pipeline
+   * (see services/garmentRecon.ts) — the single source of truth for
+   * garment rendering. Built ONCE per garment at import time via the
+   * recon-garment Edge Function (TryOffDiff Space, class-locked, seed 42).
+   * Display precedence in GarmentPhoto: reconUrl > SVG `rendering`
+   * skeleton. Local-only until synced, like `photo`.
    */
-  studioComposite?: string;
-  /** studio_composite build state — independent of renderStatus (SVG). */
-  studioCompositeStatus?: "pending" | "ready" | "failed";
+  reconUrl?: string;
+  /** Reconstruction build state — independent of the SVG skeleton state. */
+  reconStatus?: "pending" | "ready" | "failed";
+  /** Human-readable failure reason for the last recon attempt. */
+  reconError?: string;
   /**
-   * Phase 4 img2img final (public URL in Supabase `wardrobe` bucket as
-   * `<userId>/<garmentId>-studio.jpg`, mirrored from the
-   * `studio_render_url` column). Built ONCE per garment at import time via
-   * the enhance-garment Edge Function (Phase 1 composite → FLUX.1-schnell
-   * Space, strength 0.3, 4 steps, seed 42) — never re-generated per view.
-   * Display precedence in GarmentPhoto: studioRenderUrl > studioComposite
-   * > SVG `rendering` fallback. Local-only until synced, like `photo`.
+   * User-set: this garment carries logos, graphics, or legible text.
+   * Routes reconstruction to the detail renderer (FLUX.2-klein, ~60 s)
+   * instead of the default TryOffDiff (~30 s), which drops micro-graphics
+   * (verified: GUESS side tape omitted). Default/unset = plain → TryOffDiff.
+   * No auto-detection: the stub analyzer cannot see prints, so the wearer
+   * decides. Toggling clears any cached recon so the other renderer runs.
    */
-  studioRenderUrl?: string;
-  /** img2img final build state — independent of SVG + composite states. */
-  studioRenderStatus?: "pending" | "ready" | "failed";
-  /**
-   * Photo-faithful AI flat-lay (Gemini 3.1 Flash Image, direct REST —
-   * see services/studioFlatlay.ts). JPEG/PNG data URL built on explicit
-   * opt-in or budgeted auto-run; COST-GATED (no free tier on image output)
-   * so the free composite + SVG always carry the default experience.
-   * Display precedence in GarmentPhoto: flatLay > studioRenderUrl >
-   * studioComposite > SVG `rendering` fallback. Local-only, not synced.
-   */
-  studioFlatLay?: string;
-  /** AI flat-lay build state — independent of SVG/composite/enhance states. */
-  studioFlatLayStatus?: "pending" | "ready" | "failed";
+  hasPrint?: boolean;
+  /** Which backend built the cached reconUrl — recorded at success time. */
+  reconRenderer?: "tryoff" | "klein";
   /**
    * Cached studio rendering (SVG data URL): the single display image for
    * this garment on every screen. Generated once via studioRender and stored
