@@ -96,49 +96,56 @@ lucide-react, Supabase (auth/Postgres/RLS/storage), Open-Meteo, Gemini.
 
 ---
 
-## Phase 2/3 garment img2img pipeline (ACTIVE workstream, 2026-09-21)
+## Garment reconstruction pipeline (ACTIVE workstream, 2026-09-23)
 
-Studio-quality garment re-light for Phase 1 `studio_composite` images.
-Phase 1 segmentation/composite is NOT touched by this workstream.
+Single source of truth: original photo → analyzer stub (full-frame bbox,
+Qwen3-VL-8B pending) → `recon-garment` Edge Function → renderer by
+garment.hasPrint (TryOffDiff default, Klein for print) → recon PNG on
+`garment.reconUrl` (+ `recon_url` column) → GarmentPhoto shows recon,
+SVG skeleton underneath while pending.
 
-- **Live Space:** `amani-b/flowie-garment-img2img` (Gradio SDK, ZeroGPU hw).
-  Source of truth mirrored at `D:\Projects\flowie-app\hf-space\`;
-  deploy repo at `D:\Projects\flowie-garment-img2img\` (both in sync).
-- **Current model (commit `0c397bf`, RUNNING):** `black-forest-labs/FLUX.1-schnell`
-  via `FluxImg2ImgPipeline` — 768px (÷16 snapped), 4 steps,
-  `guidance_scale=0.0`, `max_sequence_length=256`, `@spaces.GPU(duration=60)`.
-  Superseded SDXL-Turbo (rendered flatter than the Kontext reference).
-- **Reference quality:** `phase3-review/n1-comparison.png` (Image 1) =
-  Phase 1 composite vs `FLUX.1-Kontext-dev` (`phase2-review/edit-hf-kontext.png`,
-  15.6s via HF Inference Providers, credits later depleted). Schnell result
-  judged "satisfactorily close, one logo text wrong".
-- **API (stable `/predict`):** `input_image, prompt, negative_prompt (inert),
-  strength, num_steps (1-4), seed` → polished PIL. Node clients:
-  `scripts/space-img2img-test.mjs` (single timed call),
-  `scripts/space-strength-sweep.mjs` (strength grid). Backend creds from
-  `.env`: `HF_SPACE_ID`, `HF_TOKEN` (never hardcoded, no `VITE_` prefix).
-- **Gated-model setup (DONE, do not redo):** license accepted at
-  `black-forest-labs/FLUX.1-schnell` + `HF_TOKEN` Space Secret. If the Space
-  ever 401s (`GatedRepoError`) again: check license+token same account, token
-  has Repositories read scope, secret named exactly `HF_TOKEN`, restart Space.
-- **Quota (free):** burns per *reserved* slot, not compute — 60 s/call =
-  **~5 garments/day free** (~40 PRO), reset 24 h after first GPU use.
-  Check remainder at https://huggingface.co/settings/billing. Browser clicks
-  burn the same slot as API calls.
-- **Current prompt default:** "professional studio product photography of a
-  garment, soft diffused lighting, crisp fabric texture, perfectly legible
-  printed text and logos, accurate small lettering, clean e-commerce catalog
-  shot, photorealistic" (legibility phrase added for the logo issue).
-- **NEXT (pending):** 3-point mini-sweep, 4 steps, seed 42 —
-  strengths `0.25, 0.3, 0.35` on `phase1-review/photo-1-after.jpg`; zoom the
-  logo, pick the highest strength where lettering stays correct (= production
-  knee). Grade (a) same garment (b) studio light (c) fabric detail (d) no junk.
-  Escalation ladder if logos still break: 1024px run (needs `duration=90`,
-  ~3/day) → masked two-pass → Kontext-dev via Inference Providers when
-  credits reset (same harness). Deliberately NOT built: original-pixel overlay
-  (Phase 1 reframes via bbox-center+pad, so cutout/composite misalign; needs
-  Phase 1 to persist its bbox transform first).
-- **Key docs:** `hf-space/README.md` (deploy+quota), `hf-space/app.py`,
-  `hf-space/requirements.txt` (`torch==2.8.0` cu126, `diffusers==0.34.0`,
-  `transformers==4.44.0`, `sentencepiece`, `gradio==5.50.0`),
-  `phase2-review/space-zerogpu-timing.md`, `phase3-review/README.md`.
+- **Renderer (default):** TryOffDiffv2-MGT via YOUR Space
+  `amani-b/garment-flat-lay-flowie` (Gradio SDK, ZeroGPU hw, 30 s reserved).
+  Engine source mirrored at `D:\Projects\flowie-app\hf-tryoff\`.
+  Easy case (navy trousers) PASS; hard case (GUESS shorts) shape/color PASS,
+  micro-print dropped (measured limitation — routed around, not fixed).
+- **Renderer (detail):** FLUX.2-klein-base-4B via YOUR Space
+  `amani-b/klein-garment-test` (Apache-2.0, public, ~13 GB VRAM, 60 s
+  reserved; source at `hf-klein/`). Track 2 verdict (2 bounded calls,
+  Sept 2026): GUESS tape legible where TryOffDiff drops it — BUT invents
+  drawstring + side stripes on plain navy trousers and shifts color
+  saturation. Wearer-set `hasPrint` flag decides (stub analyzer cannot
+  detect prints); ready tiles show "· detail render" for Klein builds.
+- **Harness:** `scripts/recon-harness.mjs` — saves every intermediate to
+  `recon-work/<slug>/` (original, analysis.json, bbox.json, crop.jpg,
+  recon-raw.png, chroma.png, final.png, qa.json). `--tryoff` for remote,
+  `--klein` for the detail Space (bounded tests only),
+  `--selftest` for zero-quota end-to-end (synthetic chroma fixture),
+  `--bbox=x,y,w,h` for worn-photo boxes. Backend creds from `.env`:
+  `HF_TRYOFF_SPACE_ID`, `HF_KLEIN_SPACE_ID`, `HF_TOKEN` (never hardcoded,
+  no `VITE_` prefix).
+- **Edge Function:** `supabase/functions/recon-garment/` (replaces retired
+  `enhance-garment` + `flatlay-tryoff`). Deploy:
+  `supabase functions deploy recon-garment --no-verify-jwt`, secrets
+  `HF_TRYOFF_SPACE_ID` + `HF_KLEIN_SPACE_ID` + `HF_TOKEN`. Delete the two
+  retired functions from the dashboard.
+- **DB:** apply `supabase/migration_recon_url.sql` + new
+  `supabase/migration_has_print.sql` once each (dashboard → SQL editor).
+  Client works without them (column guards), SVG skeleton unaffected.
+  `studio_render_url` (FLUX re-light) is retired — never written; legacy
+  values ignored even when present.
+- **Quota (free):** 30 s tryoff / 60 s klein reserved per call → ~4 recon/day
+  budget client-side (`RECON_DAILY_BUDGET`), shared ZeroGPU pool (5 min/day).
+  Check remainder at https://huggingface.co/settings/billing.
+- **Retired 2026-09-23:** `studioComposite` (ISNet), `studioEnhance`
+  (FLUX-schnell), `studioTryoff` (whole-image caller), `studioFlatlay`
+  (Gemini billable), `closetUpgrade` bulk rollout, schnell `hf-space/`,
+  old test scripts, `@imgly/*`, `@huggingface/inference|transformers`,
+  `puppeteer-core`. Persist v12 scrubs old rendering fields. SVG
+  (`studioRender.ts`) stays ONLY as the dumb loading skeleton.
+- **Parked:** `hf-qwen/` self-hosted Qwen-Image-Edit-2511
+  (`amani-b/flowie-qwen-edit`): 20B bf16 OOMs free ZeroGPU at weight-pack
+  time (NVML/CUDACachingAllocator assert — model-loading failure, NOT auth
+  or scheduler; verified via Space UI test). Do NOT retry on free tier
+  without FP8/smaller weights. Official Qwen Space scheduler-blocked
+  (180 s refused).

@@ -1,0 +1,22 @@
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.8.0
+# Flux2KleinPipeline exists on diffusers main but is MISSING from some
+# released versions (upstream issue: "cannot import name
+# 'Flux2KleinPipeline'"). The official model card prescribes installing
+# diffusers from git — follow it exactly so the build cannot resolve to
+# a release without the class. A failed import fails the BUILD (zero
+# GPU quota burned), so this is the safe direction.
+git+https://github.com/huggingface/diffusers.git
+transformers>=4.55.0
+accelerate>=0.34.0
+Pillow>=10.4.0
+# NO gradio pin: the Space builder injects its own gradio (6.28.0 at last
+# check) into the SAME pip resolver run — our old gradio==5.50.0 pin made
+# the resolve unsatisfiable (exit code 1, zero quota burned). Let the
+# platform's version win; app.py only uses stable Blocks API
+# (Image type="filepath", Textbox, Slider, Number, Button, api_name)
+# that is unchanged in Gradio 6 (verified via migration guide + docs).
+# NO numpy pin (old numpy<2 risked the same conflict; nothing here
+# imports numpy directly) and Pillow as a floor (10.4.0 proven with the
+# tryoff Space; newer allowed for the Gradio 6 builder).
+sentencepiece==0.2.0

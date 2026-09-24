@@ -1,25 +1,25 @@
 /**
- * Garment image blob store (IndexedDB) — Phase 5 speed companion.
+ * Garment image blob store (IndexedDB) — speed companion.
  *
  * Why this exists: the zustand persist layer serialises the whole closet to
  * localStorage (~5 MB quota) on EVERY store mutation. A 40-item closet with
- * ~100 KB studio-composite JPEGs each is ~4 MB of JSON stringify/parse per
+ * ~200 KB recon PNGs each is ~8 MB of JSON stringify/parse per
  * write — jank on every progress tick, and a quota wall as closets grow.
- * Photos were already omitted; composites were the remaining weight.
+ * Photos were already omitted; recon images are the remaining weight.
  *
- * This store keeps `photo` + `studioComposite` data URLs (keyed by garment
+ * This store keeps `photo` + `recon` data URLs (keyed by garment
  * id) in IndexedDB (GB-scale quota, async, off the critical path) while the
- * persisted zustand snapshot stays lean (SVG strings + final URL strings
+ * persisted zustand snapshot stays lean (SVG strings + recon URL strings
  * only — a few KB per garment). Tiles paint instantly from the lean state;
  * blobs merge in silently when loads land and swap the image source.
  *
  * Contract: every function is best-effort and never throws — callers never
- * await. A missing blob just means the SVG/final fallback shows (which is
+ * await. A missing blob just means the SVG/photo fallback shows (which is
  * always correct). Remote-URL photos are never stored (the cloud is their
  * store); only `data:` URLs go in.
  */
 
-export type BlobKind = "photo" | "composite" | "flatlay";
+export type BlobKind = "photo" | "recon";
 
 const DB_NAME = "flowie-blobs";
 const STORE_NAME = "blobs";
@@ -122,8 +122,7 @@ export function deleteBlobsFor(id: string): void {
         const store = tx(db, "readwrite");
         if (!store) return;
         store.delete(keyFor(id, "photo"));
-        store.delete(keyFor(id, "composite"));
-        store.delete(keyFor(id, "flatlay"));
+        store.delete(keyFor(id, "recon"));
       })
       .catch(() => {
         /* best-effort */
@@ -154,8 +153,7 @@ export function clearBlobs(): void {
 
 export interface BlobPair {
   photo?: string;
-  composite?: string;
-  flatlay?: string;
+  recon?: string;
 }
 
 /**
@@ -201,7 +199,7 @@ export function loadAllBlobs(): Promise<Map<string, BlobPair>> {
                       if (sep > 0 && typeof getReq.result === "string") {
                         const kind = k.slice(0, sep);
                         const id = k.slice(sep + 1);
-                        if (kind === "photo" || kind === "composite" || kind === "flatlay") {
+                        if (kind === "photo" || kind === "recon") {
                           const cur = out.get(id) ?? {};
                           (cur as Record<string, string>)[kind] = getReq.result;
                           out.set(id, cur);

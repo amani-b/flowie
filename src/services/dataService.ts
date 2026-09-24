@@ -16,8 +16,10 @@ import { ensureRendering } from "./studioRender";
 // Set false for the session the first time the live DB rejects `render_url`
 // (migration not applied yet) — writes then omit it instead of failing.
 let renderUrlOk = true;
-// Same guard for the Phase 4 `studio_render_url` column.
-let studioRenderUrlOk = true;
+// Same guard for the `recon_url` column (migration_recon_url.sql).
+let reconUrlOk = true;
+// Same guard for the `has_print` flag (migration_has_print.sql).
+let hasPrintOk = true;
 
 /**
  * Cloud sync layer (Supabase). Every call is a no-op when `supabase` is
@@ -103,8 +105,11 @@ function rowToGarment(r: WardrobeRow): Garment {
   // exists (see migration_render_url.sql); otherwise it is re-derived
   // deterministically from the same fields — never fetched per visit.
   const stored = (r as { render_url?: string | null }).render_url ?? undefined;
-  const storedStudio =
-    (r as { studio_render_url?: string | null }).studio_render_url ?? undefined;
+  // The reconstruction final travels the same way (migration_recon_url.sql).
+  // The retired studio_render_url (FLUX re-light) is ignored even when a
+  // legacy row still carries it — recon is the single source of truth.
+  const storedRecon =
+    (r as { recon_url?: string | null }).recon_url ?? undefined;
   const base: Garment = {
     id: r.id,
     name: r.name,
@@ -121,9 +126,14 @@ function rowToGarment(r: WardrobeRow): Garment {
     photo: r.image_url ?? undefined,
     createdAt: new Date(r.created_at).getTime(),
   };
-  if (storedStudio) {
-    base.studioRenderUrl = storedStudio;
-    base.studioRenderStatus = "ready";
+  if (storedRecon) {
+    base.reconUrl = storedRecon;
+    base.reconStatus = "ready";
+  }
+  // Wearer-set renderer signal (migration_has_print.sql). Absent on
+  // pre-migration rows → undefined → default TryOffDiff routing.
+  if ((r as { has_print?: boolean | null }).has_print) {
+    base.hasPrint = true;
   }
   if (stored) {
     base.rendering = stored;
@@ -142,8 +152,11 @@ function garmentToInsert(userId: string, g: Garment): WardrobeInsert {
     // Cached studio rendering lives on the record next to the photo.
     // Omitted when the live DB predates the render_url migration.
     ...(renderUrlOk ? { render_url: g.rendering ?? null } : {}),
-    // Phase 4 img2img final — omitted until migration_studio_render_url.sql.
-    ...(studioRenderUrlOk ? { studio_render_url: g.studioRenderUrl ?? null } : {}),
+    // Reconstruction final — omitted until migration_recon_url.sql.
+    // (studio_render_url from the retired FLUX pipeline is never written.)
+    ...(reconUrlOk ? { recon_url: g.reconUrl ?? null } : {}),
+    // Print flag (renderer signal) — omitted until migration_has_print.sql.
+    ...(hasPrintOk ? { has_print: g.hasPrint ?? false } : {}),
     category: g.category,
     color: g.color,
     colors: g.colors, // New field: array of hex values
@@ -306,16 +319,18 @@ export async function insertGarmentRow(
     .upsert(payload, { onConflict: "id" })
     .select("id")
     .single();
-  if (error && /render_url/.test(error.message) && (renderUrlOk || studioRenderUrlOk)) {
-    // Live DB predates render_url / studio_render_url migrations — retry
+  if (error && /render_url|recon_url|has_print/.test(error.message) && (renderUrlOk || reconUrlOk || hasPrintOk)) {
+    // Live DB predates render_url / recon_url / has_print migrations — retry
     // without them once and stop sending them for the rest of the session.
-    // Both are re-derivable (SVG on-device / img2img retry), so nothing lost.
+    // All are re-derivable (SVG on-device / recon retry / flag default), so nothing lost.
     renderUrlOk = false;
-    studioRenderUrlOk = false;
-    const { render_url: _dropped, studio_render_url: _dropped2, ...legacy } =
+    reconUrlOk = false;
+    hasPrintOk = false;
+    const { render_url: _dropped, recon_url: _dropped2, has_print: _dropped3, ...legacy } =
       payload as Record<string, unknown>;
     void _dropped;
     void _dropped2;
+    void _dropped3;
     ({ data, error } = await supabase
       .from("wardrobe_items")
       .upsert(legacy, { onConflict: "id" })

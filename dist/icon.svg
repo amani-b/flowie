@@ -1,13 +1,30 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="116" fill="#0C110D"/>
-  <rect width="512" height="512" rx="116" fill="url(#g)" opacity="0.55"/>
+  <!-- Full-bleed background: the OS mask supplies the rounding. No rounded
+       rect, no transparency, so the icon fills the whole app box. -->
+  <rect width="512" height="512" fill="#0C110D"/>
   <defs>
-    <radialGradient id="g" cx="22%" cy="12%" r="90%">
-      <stop offset="0%" stop-color="#3DDC97" stop-opacity="0.35"/>
-      <stop offset="55%" stop-color="#3DDC97" stop-opacity="0"/>
+    <radialGradient id="g" cx="50%" cy="30%" r="75%">
+      <stop offset="0%" stop-color="#3DDC97" stop-opacity="0.28"/>
+      <stop offset="60%" stop-color="#3DDC97" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <path d="M256 176c0-26 40-22 40-56a40 40 0 1 0-80 0" fill="none" stroke="#E9F0E9" stroke-width="26" stroke-linecap="round"/>
-  <path d="M256 176 92 336c-19 19-6 52 21 52h286c27 0 40-33 21-52Z" fill="none" stroke="#3DDC97" stroke-width="30" stroke-linejoin="round"/>
-  <path d="M404 84l12 30 30 12-30 12-12 30-12-30-30-12 30-12Z" fill="#FFB84D"/>
+  <rect width="512" height="512" fill="url(#g)"/>
+  <!-- Hanger: hook + arms (cream). Key art lives inside the maskable safe
+       zone (central ~80%), so round/square masks never clip it. -->
+  <path d="M256 216 c0-26 40-22 40-56 a40 40 0 1 0-80 0" fill="none" stroke="#E9F0E9" stroke-width="24" stroke-linecap="round"/>
+  <path d="M256 216 L256 238" fill="none" stroke="#E9F0E9" stroke-width="24" stroke-linecap="round"/>
+  <path d="M256 238 L142 304 M256 238 L370 304" fill="none" stroke="#E9F0E9" stroke-width="18" stroke-linecap="round"/>
+  <!-- Camp-collar shirt (cream) -->
+  <path d="M198 256 L232 240 L256 262 L280 240 L314 256 L352 292 L322 318 L318 312 L318 398 Q318 412 304 412 L208 412 Q194 412 194 398 L194 312 L190 318 L160 292 Z" fill="#E9F0E9"/>
+  <!-- Collar shading -->
+  <path d="M232 240 L256 262 L244 278 L220 254 Z" fill="#3DDC97"/>
+  <path d="M280 240 L256 262 L268 278 L292 254 Z" fill="#3DDC97"/>
+  <!-- Placket -->
+  <rect x="250" y="278" width="12" height="128" rx="6" fill="#0C110D" opacity="0.14"/>
+  <!-- Buttons -->
+  <circle cx="256" cy="300" r="6.5" fill="#0C110D"/>
+  <circle cx="256" cy="332" r="6.5" fill="#0C110D"/>
+  <circle cx="256" cy="364" r="6.5" fill="#0C110D"/>
+  <!-- Chest pocket (brand mint) -->
+  <rect x="276" y="296" width="34" height="42" rx="7" fill="#3DDC97"/>
 </svg>

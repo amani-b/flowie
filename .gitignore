@@ -62,3 +62,6 @@ htmlcov/
 
 # MyPy cache
 .mypy_cache/
+
+# Recon harness workdirs (per-garment intermediates, may contain user photos)
+recon-work/

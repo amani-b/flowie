@@ -204,16 +204,6 @@ export default function App() {
     void boot();
   }, [boot]);
 
-  // Pre-fetch the on-device segmentation model at boot so the first
-  // upload's background removal doesn't eat the ~40 MB download in its
-  // critical path. Best-effort and offline-safe: warm is idempotent and a
-  // missed warm-up just means the first job downloads the model itself.
-  useEffect(() => {
-    import("./services/studioComposite")
-      .then((m) => m.warmStudioComposite())
-      .catch(() => {});
-  }, []);
-
   return (
     <BrowserRouter>
       {/* OAuthHashHandler must be outside Routes to run on ALL paths before routing */}
