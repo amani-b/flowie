@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import { captureError } from "../lib/telemetry";
 
 interface Props {
   children: ReactNode;
@@ -28,6 +29,7 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: unknown) {
     console.error("App crashed:", error, info);
+    captureError("boundary", error);
   }
 
   componentDidUpdate(prevProps: Props) {

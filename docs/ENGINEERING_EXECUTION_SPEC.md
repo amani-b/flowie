@@ -477,6 +477,26 @@ DECISION = locked. PLANNED = specified, not implemented.
   retains it; Phase 6 hygiene may untrack or remove it with a §9 note). Its
   "Garment reconstruction pipeline" section is still accurate and is mirrored
   by spec §1/§6.
+- PHASE 0 EXECUTED (2026-09-26), branch `impl/phases-0-7`, all numbers in
+  `docs/BASELINE.md`. Two spec assumptions were wrong, both in the pessimistic
+  direction, so the downstream phases are better off than planned:
+  (1) SPEC OVERSTATED the snapshot problem — it implied the whole snapshot was
+  the problem, but the real driver is `reconUrl` (never cleared by
+  `partialize`, ~140 KB per garment, and *also* written to IndexedDB, so it
+  is genuinely double-persisted). `rendering` is a 5 KB SVG and is small
+  beside it. 40 garments with recon ready = **5.8 MB**, i.e. 57× the DoD #4
+  budget, not marginally over it. Phase 3 must strip `reconUrl`, not just
+  `photo`; §4 Phase 3 wording is optimistic here and should be read with this
+  row.
+  (2) PER-TAB BOUNDARY HAD NO EXISTING RESET PATH — `ErrorBoundary` already
+  accepted a `resetKey` prop, so containment needed no new component, but the
+  key had to be wired to `tab` for the boundary to clear on tab return.
+  Verified on device: the shell, top bar and bottom nav survive a thrown
+  screen (RC-7 closed). Recovery is user-driven, not automatic.
+  Also: JDK/SDK state re-checked per the old handoff's warning — `adb`, node
+  and the SDK are fine, but **JAVA_HOME is still unresolved (needs JDK 21,
+  PATH default reported failing)** and `sdkmanager` is still unconfirmed. Both
+  stay open for Phase 5; recorded as unverified rather than assumed good.
 
 ## 10. Implementer handoff prompt (single source)
 

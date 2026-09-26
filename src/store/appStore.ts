@@ -20,6 +20,7 @@ import type {
   WeatherNow,
 } from "../types";
 import { DEMO_OUTFITS, getDemoWardrobe } from "../lib/mock";
+import { markStage } from "../lib/telemetry";
 import { fetchWeather } from "../services/weather";
 import { generateStyle } from "../services/stylist";
 import { ensureRendering } from "../services/studioRender";
@@ -320,8 +321,16 @@ function runReconJob(id: string): void {
   if (!snapshot || snapshot.reconUrl) return;
   if (!snapshot.photo) return;
   reconInFlight.add(id);
+  const enqueuedAt = performance.now();
   reconChain = reconChain.then(async () => {
     try {
+      // Phase 0 timings: how long a job waits in the serial lane before it
+      // starts, then each stage of the pipeline itself. A large `wait` here
+      // is the free-ZeroGPU serialisation showing up in the UI.
+      markStage(
+        "recon:lane-start",
+        `garment=${id} waited=${(performance.now() - enqueuedAt).toFixed(0)}ms`
+      );
       const state = useAppStore.getState();
       const current = state.garments.find((g) => g.id === id);
       if (!current) return;
@@ -341,6 +350,7 @@ function runReconJob(id: string): void {
         ...applyReconPatch(s, id, { reconStatus: "pending" as const, reconError: undefined }),
       }));
       const renderer: "klein" | "tryoff" = current.hasPrint ? "klein" : "tryoff";
+      markStage("recon:request", `garment=${id} renderer=${renderer}`);
       const outcome = await requestGarmentRecon({
         garmentId: id,
         reconClass: analysis.reconClass,
@@ -351,6 +361,7 @@ function runReconJob(id: string): void {
         renderer,
         name: current.name,
       });
+      markStage("recon:responded", `garment=${id} status=${outcome.status}`);
       if (outcome.status === "ready") {
         const url = outcome.reconDataUrl;
         try {
@@ -543,11 +554,16 @@ export const useAppStore = create<AppStore>()(
         // Blob sources first (lean snapshots omit them): IDB reads are
         // milliseconds-local, and photo-gated resume below needs them.
         // Tiles already painted from photo/SVG — this never blocks display.
+        // Phase 0 timing: this is the boot hotspot (RC-4) — it loads ALL IDB
+        // blobs up front. Measure before Phase 3 replaces it with lazy
+        // per-tile resolution.
+        markStage("boot:rehydrate-start");
         try {
           await rehydrateBlobs();
         } catch {
           /* rehydrate is best-effort */
         }
+        markStage("boot:rehydrate-end");
         // Resume recon jobs interrupted by a reload (persisted as
         // "pending"): the photo/SVG skeleton is already on screen, recon
         // just lands when it completes. "failed" waits for manual retry so

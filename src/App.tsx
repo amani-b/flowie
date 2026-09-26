@@ -7,6 +7,8 @@ import TopBar from "./components/TopBar";
 import BottomNav from "./components/BottomNav";
 import Drawer from "./components/Drawer";
 import Toast from "./components/Toast";
+import ErrorBoundary from "./components/ErrorBoundary";
+import { markStage } from "./lib/telemetry";
 import AuthScreen from "./screens/AuthScreen";
 import AuthCallback from "./screens/AuthCallback";
 import Onboarding from "./screens/Onboarding";
@@ -90,6 +92,55 @@ const SCREENS = {
   calendar: CalendarView,
 } as const;
 
+type TabId = keyof typeof SCREENS;
+
+const TAB_LABELS: Record<TabId, string> = {
+  home: "Today",
+  closet: "Closet",
+  studio: "Studio",
+  looks: "Lookbook",
+  calendar: "Calendar",
+};
+
+/**
+ * In-tab recovery screen. The point is that the shell survives: the wearer
+ * can still switch tabs and reach the drawer, so a single broken screen is
+ * a dead end for that tab only — never for the app.
+ */
+function TabErrorFallback({ tab }: { tab: TabId }) {
+  const other = (Object.keys(TAB_LABELS) as TabId[]).find((t) => t !== tab);
+  const goElsewhere = () => {
+    if (other) useAppStore.setState({ tab: other });
+  };
+  return (
+    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 px-6 py-12 text-center">
+      <p className="font-display text-[20px] font-extrabold">
+        {TAB_LABELS[tab]} didn&rsquo;t load
+      </p>
+      <p className="max-w-[300px] text-[13px] font-medium leading-relaxed text-mut">
+        Your closet is safe — nothing was lost. Switch tabs and come back, or
+        reload if it keeps happening.
+      </p>
+      <div className="mt-2 flex gap-2">
+        {other && (
+          <button
+            onClick={goElsewhere}
+            className="rounded-full bg-acc px-5 py-2.5 text-[13px] font-extrabold text-accink transition active:scale-95"
+          >
+            Go to {TAB_LABELS[other]}
+          </button>
+        )}
+        <button
+          onClick={() => window.location.reload()}
+          className="rounded-full border border-line px-4 py-2.5 text-[13px] font-extrabold text-mut transition active:scale-95"
+        >
+          Reload
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Splash() {
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center gap-4 px-6">
@@ -117,6 +168,10 @@ function Splash() {
 function Shell() {
   const tab = useAppStore((s) => s.tab);
   const Screen = SCREENS[tab];
+  useEffect(() => {
+    // Phase 0 timing: tab-switch cost, including the AnimatePresence gap.
+    markStage(`tab:${tab}`);
+  }, [tab]);
   return (
     <>
       <TopBar />
@@ -130,7 +185,17 @@ function Shell() {
               exit={{ opacity: 0, y: -12 }}
               transition={{ duration: 0.22, ease: "easeOut" }}
             >
-              <Screen />
+              {/* Per-tab boundary (Phase 0, RC-7): a throw in one screen used
+                  to bubble to the ROOT boundary, so a single bad tab nuked the
+                  whole app — nav, drawer and the other tabs included — and the
+                  only recovery was a reload. Here the damage stops at the
+                  active screen: the shell, bottom nav and drawer stay alive, so
+                  the wearer can switch tabs (resetKey={tab} latches a fresh
+                  mount per tab, clearing the error on return). `mode="wait"` is
+                  kept for now; Phase 4 makes tab switching instant. */}
+              <ErrorBoundary resetKey={tab} fallback={<TabErrorFallback tab={tab} />}>
+                <Screen />
+              </ErrorBoundary>
             </motion.div>
           </AnimatePresence>
         </div>

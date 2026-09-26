@@ -18,6 +18,7 @@ import Sheet from "../components/Sheet";
 import { LogoMark } from "../components/icons";
 import { tagGarmentPhoto, taggingToGarment, withTimeout, type TaggingResult } from "../services/aiStylistService";
 import { reconClassFor } from "../services/garmentRecon";
+import { markStage } from "../lib/telemetry";
 
 type Filter = "all" | Category;
 
@@ -63,11 +64,13 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
       notify("Please select image files", "err");
       return;
     }
+    markStage("import:files-picked", `count=${newFiles.length}`);
     setFiles((prev) => [...prev, ...newFiles]);
   };
 
   const analyzeFiles = async () => {
     if (files.length === 0) return;
+    markStage("import:analyze-start", `files=${files.length}`);
     setAnalyzing(true);
     setProgress(0);
     cancelRef.current = false;
@@ -85,17 +88,24 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
           if (cancelRef.current) return;
           const file = queue.shift()!;
           try {
+            // Phase 0 timings: `compress` is the main-thread decode/resize
+            // that Phase 1 moves into a worker — it is the expected source of
+            // the long tasks this gate is measuring.
+            markStage("import:compress-start", file.name);
             const dataUrl = await withTimeout(
               compressImage(file),
               35_000,
               `Reading ${file.name}`
             );
+            markStage("import:compress-end", file.name);
             if (cancelRef.current) return;
+            markStage("import:tag-start", file.name);
             const tags = await withTimeout(
               tagGarmentPhoto(dataUrl, file.name),
               60_000,
               `Analyzing ${file.name}`
             );
+            markStage("import:tag-end", file.name);
             results.push({
               ...tags,
               tempId: uid("p"),
@@ -114,6 +124,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
         }
       });
       await Promise.all(lanes);
+      markStage("import:lanes-done", `results=${results.length}`);
       // Completion order is nondeterministic across lanes — restore a
       // stable review list so items don't shuffle between runs.
       results.sort((a, b) => a.fileName.localeCompare(b.fileName));
@@ -124,6 +135,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
     } finally {
       setAnalyzing(false);
       setFiles([]);
+      markStage("import:analyze-end");
     }
   };
 
