@@ -1,4 +1,3 @@
-```
 # Dependencies
 node_modules/
 
@@ -65,3 +64,4 @@ htmlcov/
 
 # Recon harness workdirs (per-garment intermediates, may contain user photos)
 recon-work/
+

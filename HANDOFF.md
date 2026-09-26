@@ -1,5 +1,16 @@
 # FitFlow AI — Project Handoff
 
+> ⚠️ **SUPERSEDED — DO NOT USE AS A HANDOFF.** This file is a stale snapshot
+> from the 2026-09-23 session. Its phase numbering ("Phase 2 next"), its
+> architecture table (`src/components/Avatar.tsx`), and its persist version
+> (`v2`) no longer match the code. It is kept only for historical context and
+> is retained in git history if deleted.
+>
+> The single authoritative engineering specification is
+> `docs/ENGINEERING_EXECUTION_SPEC.md`; the single handoff prompt is
+> `docs/IMPLEMENTER_HANDOFF.md`. The recon pipeline section below is still
+> accurate and is mirrored in the spec.
+
 > Read this first. It tells a fresh session everything needed to continue
 > without rebuilding what already exists.
 
