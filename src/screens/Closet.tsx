@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Camera, Loader2, Plus, RotateCcw, Search, Sparkles, Trash2, X } from "lucide-react";
+import { Ban, Camera, Loader2, Plus, RotateCcw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
+import { INTERRUPTED_ERROR, useJobsStore } from "../store/jobsStore";
+import { cancel as cancelJob } from "../services/jobQueue";
+import { useElapsedSeconds } from "../lib/useElapsed";
 import { CATEGORIES } from "../lib/mock";
 import {
   COLOR_SWATCHES,
@@ -27,6 +30,9 @@ interface PendingGarment extends TaggingResult {
   tempId: string;
   imageDataUrl?: string;
   fileName: string;
+  /** Prepared-image hash, carried through review so the recon cache still
+   *  matches when the item is saved later (Phase 2). */
+  photoSha256?: string;
 }
 const SHORT_CAT: Record<Category, string> = {
   top: "Top",
@@ -164,7 +170,15 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
     handleRef.current = startImport(items, {
       onItem: (garment, tags, fileName) => {
         if (review) {
-          collected.push({ ...tags, tempId: uid("p"), imageDataUrl: garment.photo, fileName });
+          collected.push({
+            ...tags,
+            tempId: uid("p"),
+            imageDataUrl: garment.photo,
+            fileName,
+            // The hash must survive the review round-trip too, or saving
+            // later would miss the content-addressed recon cache.
+            photoSha256: garment.photoSha256,
+          });
         } else {
           // Optimistic: visible in the closet immediately, and recon /
           // sync run behind it exactly as before.
@@ -214,7 +228,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
 
   const confirmAndSave = () => {
     pending.forEach((p) => {
-      const garment = taggingToGarment(p, p.imageDataUrl);
+      const garment = taggingToGarment(p, p.imageDataUrl, p.photoSha256);
       addGarment(garment);
     });
     notify(`${pending.length} item(s) added to closet`);
@@ -740,6 +754,13 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
   const retryRecon = useAppStore((s) => s.retryRecon);
   const setGarmentPrint = useAppStore((s) => s.setGarmentPrint);
   const notify = useAppStore((s) => s.notify);
+  // Live queue state for THIS garment, so the sheet reports the step that is
+  // really running instead of a generic spinner (and so the controls agree
+  // with the banner).
+  const reconJob = useJobsStore((s) => (garment ? s.jobs[garment.id] : undefined));
+  const reconLive =
+    reconJob?.status === "running" || reconJob?.status === "queued";
+  const elapsed = useElapsedSeconds(reconJob?.startedAt);
   const [confirmDel, setConfirmDel] = useState(false);
 
   useEffect(() => {
@@ -774,19 +795,40 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
               {g.reconRenderer === "klein" ? " · detail render" : ""}
             </p>
           ) : g.reconStatus === "pending" ? (
-            <p className="flex items-center gap-1.5 text-[11px] font-bold text-mut">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-acc" /> Reconstructing… photo showing
-            </p>
+            <div className="flex items-center justify-between gap-2 rounded-[14px] border border-line px-3.5 py-2.5">
+              <p className="flex items-center gap-1.5 text-[11px] font-bold leading-snug text-mut">
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-acc" />
+                {/* Uploading and "waiting on the renderer" are very different
+                    waits for the wearer — say which one this is, and how long
+                    it has been going (recon reports no percentage). */}
+                {reconJob?.status === "running"
+                  ? `${reconJob.stage ?? "Reconstructing"} · ${elapsed}s · photo showing`
+                  : reconJob?.status === "queued"
+                    ? "Queued behind another garment · photo showing"
+                    : "Reconstructing… photo showing"}
+              </p>
+              {reconLive && (
+                <button
+                  onClick={() => cancelJob(g.id)}
+                  className="flex shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11px] font-extrabold text-ink transition active:scale-95"
+                >
+                  <Ban className="h-3.5 w-3.5" /> Cancel
+                </button>
+              )}
+            </div>
           ) : g.photo && !g.reconUrl ? (
             <div className="flex items-center justify-between gap-2 rounded-[14px] border border-line px-3.5 py-2.5">
               <p className="text-[11px] font-bold leading-snug text-mut">
                 {g.reconStatus === "failed"
-                  ? `Reconstruction didn’t run${g.reconError ? ` — ${g.reconError}` : ""} — photo kept. Retry when quota allows.`
+                  ? g.reconError === INTERRUPTED_ERROR
+                    ? "Interrupted when the app closed — photo kept. One tap to finish it."
+                    : `Reconstruction didn’t run${g.reconError ? ` — ${g.reconError}` : ""} — photo kept. Retry when quota allows.`
                   : "Rebuild this as a clean standalone garment — free, one-time."}
               </p>
               <button
                 onClick={() => retryRecon(g.id)}
-                className="flex shrink-0 items-center gap-1.5 rounded-full bg-acc px-3 py-1.5 text-[11px] font-extrabold text-accink transition active:scale-95"
+                disabled={reconLive}
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-acc px-3 py-1.5 text-[11px] font-extrabold text-accink transition active:scale-95 disabled:opacity-60"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 {g.reconStatus === "failed" ? "Try again" : "Reconstruct"}
@@ -797,7 +839,7 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
             <button
               onClick={() => g.reconStatus !== "pending" && setGarmentPrint(g.id, !g.hasPrint)}
               aria-pressed={!!g.hasPrint}
-              disabled={g.reconStatus === "pending"}
+              disabled={reconLive || g.reconStatus === "pending"}
               className="flex w-full items-center justify-between gap-2 rounded-[14px] border border-line px-3.5 py-2.5 text-left transition active:scale-[0.99] disabled:opacity-60"
             >
               <span>

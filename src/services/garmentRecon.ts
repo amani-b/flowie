@@ -154,6 +154,34 @@ export type ReconOutcome =
   | { status: "failed"; error: string }
   | { status: "skipped"; reason: string };
 
+function isAbortError(e: unknown): boolean {
+  return (
+    e instanceof Error &&
+    (e.name === "AbortError" || /abort/i.test(e.message))
+  );
+}
+
+/**
+ * Reject as soon as `signal` aborts, without waiting for the HTTP call to
+ * give up. The underlying request cannot be truly cancelled (supabase-js has
+ * no per-call signal), but the job queue stops waiting on it, so a cancelled
+ * recon frees its serial lane immediately instead of holding it for the full
+ * timeout.
+ */
+function abortable<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(resolve, reject).finally(() =>
+      signal.removeEventListener("abort", onAbort)
+    );
+  });
+}
+
 /**
  * One reconstruction call. Never throws for recon reasons — resolves to
  * a status object; callers keep photo/SVG fallbacks.
@@ -166,10 +194,22 @@ export async function requestGarmentRecon(args: {
   renderer?: ReconRenderer;
   name?: string;
   timeoutMs?: number;
+  /** Job-queue cancellation. Aborting settles as `skipped("cancelled")`. */
+  signal?: AbortSignal;
+  /** Human-readable step report, for the progress banner/detail sheet. */
+  onStage?: (stage: string) => void;
 }): Promise<ReconOutcome> {
   const { garmentId, reconClass, timeoutMs = RECON_TIMEOUT_MS } = args;
   const renderer: ReconRenderer = args.renderer ?? "tryoff";
   const source = args.photoDataUrl;
+  const stage = (s: string) => {
+    try {
+      args.onStage?.(s);
+    } catch {
+      /* a bad reporter must not fail a recon call */
+    }
+  };
+  if (isSupabaseConfigured && supabase && source) stage("Checking today's budget…");
   if (!isSupabaseConfigured || !supabase) {
     return { status: "skipped", reason: "mock-mode" };
   }
@@ -179,6 +219,9 @@ export async function requestGarmentRecon(args: {
   if (getReconDailyCount() >= RECON_DAILY_BUDGET) {
     return { status: "skipped", reason: "daily-budget" };
   }
+  if (args.signal?.aborted) {
+    return { status: "skipped", reason: "cancelled" };
+  }
 
   const callCount = bumpReconDailyCounter();
   console.log(
@@ -187,39 +230,48 @@ export async function requestGarmentRecon(args: {
   );
 
   try {
+    stage("Uploading photo…");
     const outcome = await withTimeout(
-      (async () => {
-        const { data, error } = await supabase.functions.invoke("recon-garment", {
-          body: {
-            garment_id: garmentId,
-            image_data_url: source,
-            garment_class: reconClass,
-            renderer,
-            name: args.name ?? garmentId,
-            seed: RECON_SEED,
-          },
-        });
-        if (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          console.warn(`[garment-recon] failed garment=${garmentId}: ${msg}`);
-          return { status: "failed" as const, error: msg };
-        }
-        const url = (data as { recon_data_url?: string } | null)?.recon_data_url ?? null;
-        if (!url) {
-          // Function not deployed yet — stay on fallbacks.
-          console.warn(
-            `[garment-recon] skipped garment=${garmentId}: no recon_data_url in response (function not deployed?)`
-          );
-          return { status: "failed" as const, error: "no-url-in-response" };
-        }
-        console.log(`[garment-recon] ready garment=${garmentId} bytes=${url.length}`);
-        return { status: "ready" as const, reconDataUrl: url };
-      })(),
+      abortable(
+        (async () => {
+          const { data, error } = await supabase.functions.invoke("recon-garment", {
+            body: {
+              garment_id: garmentId,
+              image_data_url: source,
+              garment_class: reconClass,
+              renderer,
+              name: args.name ?? garmentId,
+              seed: RECON_SEED,
+            },
+          });
+          if (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            console.warn(`[garment-recon] failed garment=${garmentId}: ${msg}`);
+            return { status: "failed" as const, error: msg };
+          }
+          const url = (data as { recon_data_url?: string } | null)?.recon_data_url ?? null;
+          if (!url) {
+            // Function not deployed yet — stay on fallbacks.
+            console.warn(
+              `[garment-recon] skipped garment=${garmentId}: no recon_data_url in response (function not deployed?)`
+            );
+            return { status: "failed" as const, error: "no-url-in-response" };
+          }
+          console.log(`[garment-recon] ready garment=${garmentId} bytes=${url.length}`);
+          return { status: "ready" as const, reconDataUrl: url };
+        })(),
+        args.signal
+      ),
       timeoutMs,
       "Garment recon"
     );
     return outcome;
   } catch (e) {
+    // A cancel is a user action, not a failure — report it as such so the
+    // garment is not marked "failed" for something the wearer chose.
+    if (isAbortError(e) || args.signal?.aborted) {
+      return { status: "skipped", reason: "cancelled" };
+    }
     const msg = e instanceof Error ? e.message : String(e);
     console.warn(`[garment-recon] failed garment=${garmentId}: ${msg}`);
     return { status: "failed", error: msg };

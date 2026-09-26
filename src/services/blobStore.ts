@@ -23,7 +23,17 @@ export type BlobKind = "photo" | "recon";
 
 const DB_NAME = "flowie-blobs";
 const STORE_NAME = "blobs";
-const DB_VERSION = 1;
+/**
+ * Second store (DB v1 → v2): content-addressed recon results. Kept apart from
+ * `blobs` because the two are keyed completely differently — `blobs` is keyed
+ * by garment id and dies with the garment, while this store is keyed by
+ * source-content hash (see `services/reconCache.ts`) and must OUTLIVE the
+ * garment, so re-importing the same photo is a cache hit instead of a fresh
+ * remote call. Sharing one store would also break `loadAllBlobs`/`pruneBlobs`,
+ * which parse the `kind:id` key format.
+ */
+const CACHE_STORE_NAME = "reconCache";
+const DB_VERSION = 2;
 
 const keyFor = (id: string, kind: BlobKind): string => `${kind}:${id}`;
 
@@ -36,8 +46,14 @@ function openDb(): Promise<IDBDatabase> | null {
       dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
         const req = window.indexedDB.open(DB_NAME, DB_VERSION);
         req.onupgradeneeded = () => {
-          if (!req.result.objectStoreNames.contains(STORE_NAME)) {
-            req.result.createObjectStore(STORE_NAME);
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME);
+          }
+          // v1 → v2: additive only. An existing v1 database keeps every
+          // `blobs` entry — this creates the new store alongside it.
+          if (!db.objectStoreNames.contains(CACHE_STORE_NAME)) {
+            db.createObjectStore(CACHE_STORE_NAME);
           }
         };
         req.onsuccess = () => resolve(req.result);
@@ -57,10 +73,11 @@ function openDb(): Promise<IDBDatabase> | null {
 
 function tx(
   db: IDBDatabase,
-  mode: IDBTransactionMode
+  mode: IDBTransactionMode,
+  storeName: string = STORE_NAME
 ): IDBObjectStore | null {
   try {
-    return db.transaction(STORE_NAME, mode).objectStore(STORE_NAME);
+    return db.transaction(storeName, mode).objectStore(storeName);
   } catch {
     return null;
   }
@@ -262,4 +279,119 @@ export function pruneBlobs(liveIds: Set<string>): void {
   } catch {
     /* best-effort */
   }
+}
+
+/* ------------------- content-addressed recon cache -------------------- */
+// Keyed by source-content hash, NOT garment id: the whole point is that a
+// different garment built from identical source bytes reuses the render.
+// Values are recon data URLs. Never throws — callers treat failure as a miss
+// (which just means one extra remote call, the safe direction to fail).
+
+/** Fire-and-forget write of one cache entry. */
+export function saveCacheEntry(key: string, value: string): void {
+  try {
+    if (!key || !value) return;
+    const open = openDb();
+    if (!open) return;
+    void open
+      .then((db) => {
+        const store = tx(db, "readwrite", CACHE_STORE_NAME);
+        if (!store) return;
+        store.put(value, key);
+      })
+      .catch(() => {
+        /* best-effort */
+      });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Read one cache entry; resolves null on any miss/failure. */
+export function loadCacheEntry(key: string): Promise<string | null> {
+  const open = openDb();
+  if (!open) return Promise.resolve(null);
+  return open
+    .then(
+      (db) =>
+        new Promise<string | null>((resolve) => {
+          try {
+            const store = tx(db, "readonly", CACHE_STORE_NAME);
+            if (!store) {
+              resolve(null);
+              return;
+            }
+            const req = store.get(key);
+            req.onsuccess = () =>
+              resolve(typeof req.result === "string" ? req.result : null);
+            req.onerror = () => resolve(null);
+          } catch {
+            resolve(null);
+          }
+        })
+    )
+    .catch(() => null);
+}
+
+/** Drop one cache entry (invalidation / wrong-image recovery). */
+export function deleteCacheEntry(key: string): void {
+  try {
+    const open = openDb();
+    if (!open) return;
+    void open
+      .then((db) => {
+        const store = tx(db, "readwrite", CACHE_STORE_NAME);
+        if (!store) return;
+        store.delete(key);
+      })
+      .catch(() => {
+        /* best-effort */
+      });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Wipe the whole recon cache (kill-switch recovery after a wrong image). */
+export function clearCacheStore(): void {
+  try {
+    const open = openDb();
+    if (!open) return;
+    void open
+      .then((db) => {
+        const store = tx(db, "readwrite", CACHE_STORE_NAME);
+        if (!store) return;
+        store.clear();
+      })
+      .catch(() => {
+        /* best-effort */
+      });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** How many recon results are cached — diagnostics/evidence only. */
+export function cacheEntryCount(): Promise<number> {
+  const open = openDb();
+  if (!open) return Promise.resolve(0);
+  return open
+    .then(
+      (db) =>
+        new Promise<number>((resolve) => {
+          try {
+            const store = tx(db, "readonly", CACHE_STORE_NAME);
+            if (!store || !("count" in store)) {
+              resolve(0);
+              return;
+            }
+            const req = store.count();
+            req.onsuccess = () => resolve(typeof req.result === "number" ? req.result : 0);
+            req.onerror = () => resolve(0);
+          } catch {
+            resolve(0);
+          }
+        })
+    )
+    .catch(() => 0);
 }

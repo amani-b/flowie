@@ -6,6 +6,7 @@ import Ambient from "./components/Ambient";
 import TopBar from "./components/TopBar";
 import BottomNav from "./components/BottomNav";
 import Drawer from "./components/Drawer";
+import JobBanner from "./components/JobBanner";
 import Toast from "./components/Toast";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { markStage } from "./lib/telemetry";
@@ -200,6 +201,7 @@ function Shell() {
           </AnimatePresence>
         </div>
       </main>
+      <JobBanner />
       <BottomNav />
       <Drawer />
     </>

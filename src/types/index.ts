@@ -39,6 +39,13 @@ export interface Garment {
   kind?: AccessoryKind; // only for accessories
   photo?: string; // compressed data-URL (max ~1MB) — source only, never displayed as the finished look
   /**
+   * Base64 SHA-256 of the prepared image bytes (from the import pipeline's
+   * worker — `PreparedImage.sha256`). Identity for the content-addressed recon
+   * cache (`services/reconCache.ts`), so re-importing identical bytes reuses
+   * the render instead of spending another remote call. Local-only, not synced.
+   */
+  photoSha256?: string;
+  /**
    * Reconstruction final (PNG data URL, 512×512): the complete empty
    * garment rebuilt from the original photo by the recon pipeline
    * (see services/garmentRecon.ts) — the single source of truth for

@@ -3,6 +3,7 @@ import { Loader2, RefreshCw } from "lucide-react";
 import { cn } from "../lib/utils";
 import { renderingFor } from "../services/studioRender";
 import { useAppStore } from "../store/appStore";
+import { useJobsStore } from "../store/jobsStore";
 import ErrorBoundary from "./ErrorBoundary";
 import type { Garment } from "../types";
 
@@ -20,8 +21,13 @@ export const BOARD_TILE_BG =
  *
  * The SVG renders synchronously, so pending recon jobs never block the
  * tile: the skeleton shows immediately with a small progress pill, then
- * the recon swaps in when it lands. Failures are silent here (photo/SVG
- * carry on) — retries live in the Closet detail sheet.
+ * the recon swaps in when it lands. Failures are silent in the artwork
+ * (photo/SVG carry on) but not silent to the wearer: a failed recon leaves
+ * a "Retry" pill here, and retries also live in the Closet detail sheet and
+ * the background-job banner.
+ *
+ * Phase 2: the pill reads the garment's actual queue job when there is one, so
+ * it shows the step that is really happening instead of a generic spinner.
  */
 export default function GarmentPhoto({
   garment,
@@ -33,6 +39,10 @@ export default function GarmentPhoto({
   eager?: boolean;
 }) {
   const backfillRendering = useAppStore((s) => s.backfillRendering);
+  const retryRecon = useAppStore((s) => s.retryRecon);
+  // Single-record selector: a stage event on some other garment's job must not
+  // re-render this tile.
+  const job = useJobsStore((s) => s.jobs[garment.id]);
   const [failed, setFailed] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
 
@@ -41,8 +51,10 @@ export default function GarmentPhoto({
   // finished state); "pending" keeps showing photo/SVG underneath.
   const recon =
     garment.reconStatus === "failed" ? undefined : garment.reconUrl;
-  const reconPending =
-    garment.reconStatus === "pending" && !recon;
+  const reconLive = job?.status === "running" || job?.status === "queued";
+  const reconPending = (reconLive || garment.reconStatus === "pending") && !recon;
+  const reconFailed =
+    garment.reconStatus === "failed" && !recon && !reconLive;
 
   // Legacy records that predate cached renderings: generate once, store on
   // the record (and its look snapshots), then display. One effect, one write.
@@ -136,9 +148,34 @@ export default function GarmentPhoto({
         className={cn("h-full w-full object-cover", imgClassName)}
       />
       {reconPending && (
-        <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-black/45 px-2 py-1 text-[9px] font-extrabold uppercase tracking-[0.12em] text-white backdrop-blur-sm">
-          <Loader2 className="h-3 w-3 animate-spin" /> Reconstructing…
+        <span className="absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] items-center gap-1 rounded-full bg-black/45 px-2 py-1 text-[9px] font-extrabold uppercase tracking-[0.12em] text-white backdrop-blur-sm">
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+          {/* The job's own step when we have one — a fixed "Reconstructing…"
+              looked identical whether we were uploading or waiting on the
+              renderer, which is exactly the dishonesty Phase 2 removes. */}
+          <span className="truncate">
+            {job?.status === "running"
+              ? job.stage ?? "Reconstructing…"
+              : job?.status === "queued"
+                ? "In queue"
+                : "Reconstructing…"}
+          </span>
         </span>
+      )}
+      {reconFailed && (
+        <button
+          onClick={(e) => {
+            // Tiles are often clickable (opens the detail sheet); retrying
+            // must not also navigate.
+            e.stopPropagation();
+            setRetryTick((t) => t + 1);
+            retryRecon(garment.id);
+          }}
+          className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-[9px] font-extrabold uppercase tracking-[0.12em] text-white backdrop-blur-sm transition active:scale-95"
+          aria-label={`Retry the studio shot for ${garment.name}`}
+        >
+          <RefreshCw className="h-3 w-3" /> Retry
+        </button>
       )}
     </div>
     </ErrorBoundary>

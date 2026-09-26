@@ -1,8 +1,16 @@
 // Minimal CDP eval helper (dev-only, not shipped). Usage:
 //   node tools/cdp-eval.mjs <url-substring> '<js expression>'
+//   CDP_PORT=9224 node tools/cdp-eval.mjs <url-substring> @probe.mjs
+//
+// CDP_PORT exists because 9222 is not guaranteed: the default Chromium
+// debugging port collides with any other browser already listening on this
+// host, and a hardcoded port silently drives the WRONG browser (it did — it
+// attached to an unrelated project's dev server). Overridable per invocation.
 import { readFileSync } from "node:fs";
 
 const [, , filter, exprArg] = process.argv;
+const PORT = process.env.CDP_PORT ?? "9222";
+
 // `@path/to/file.js` reads the expression from disk (avoids shell quoting hell).
 const isFile = exprArg.startsWith("@");
 const expr = isFile ? readFileSync(exprArg.slice(1), "utf8") : exprArg;
@@ -10,7 +18,7 @@ const expr = isFile ? readFileSync(exprArg.slice(1), "utf8") : exprArg;
 // top-level await + `return`).
 const body = isFile ? `(async () => {\n${expr}\n})()` : `(async () => { return (${expr}); })()`;
 
-const list = await (await fetch("http://localhost:9222/json/list")).json();
+const list = await (await fetch(`http://localhost:${PORT}/json/list`)).json();
 const page = list.find((t) => t.type === "page" && t.url.includes(filter));
 if (!page) {
   console.error("no target matching", filter);

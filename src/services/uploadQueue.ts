@@ -148,8 +148,13 @@ export function startImport(items: QueueItem[], cb: QueueCallbacks): ImportHandl
         if (signal.aborted) return;
 
         // Optimistic: the item lands now, tags and all, rather than waiting
-        // for the whole batch to finish.
-        cb.onItem(taggingToGarment(tags, dataUrl), tags, item.fileName);
+        // for the whole batch to finish. The prepared hash rides along as the
+        // recon cache identity (Phase 2) — no extra work, it is already here.
+        cb.onItem(
+          taggingToGarment(tags, dataUrl, prepared.sha256),
+          tags,
+          item.fileName
+        );
         added++;
         finishOne();
       } catch (e) {

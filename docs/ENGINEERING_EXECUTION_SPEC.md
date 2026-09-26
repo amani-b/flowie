@@ -498,6 +498,25 @@ DECISION = locked. PLANNED = specified, not implemented.
   PATH default reported failing)** and `sdkmanager` is still unconfirmed. Both
   stay open for Phase 5; recorded as unverified rather than assumed good.
 
+- PHASE 2 EXECUTED (2026-09-26), branch `impl/phases-0-7`. All of §5 Phase 2 is
+  implemented and statically verified (typecheck 0 errors, 34 unit tests,
+  build with no new warnings); the **device gate is still open** — see the
+  Phase 2 entry in §11 for exactly which claims are unmeasured and why. Three
+  things reality contradicted, all recorded here rather than papered over:
+  (1) A long-lived background Vite dev server is NOT usable on this host. Four
+  launch strategies all produced a server that answered the first request or
+  two and then silently stopped responding while still holding its port. This
+  is worse than no server, because a stale process looks healthy and would have
+  invalidated any gate number taken through it. Fixed by construction, not by
+  retry: `tools/run-probe.mjs` owns the dev server in-process.
+  (2) `tools/cdp-eval.mjs`'s hardcoded `localhost:9222` attached to a browser
+  already using that port — a *different project's* dev server — so probes
+  appeared to fail against a broken app. The port is now `CDP_PORT`-overridable.
+  (3) Phase 1's `references/raw-samples/` fixtures are outside Vite's served
+  root, so the Phase 2 probes could not fetch them. They are staged into the
+  already-ignored `public/_tmp_photos/` (the same discipline Phase 1 used)
+  rather than widening the served root.
+
 ## 10. Implementer handoff prompt (single source)
 
 The copy-pasteable handoff prompt lives in exactly one place:
@@ -582,6 +601,64 @@ Two further observations from the corrected run, both non-blocking:
 - Snapshot is 186 KB with 17 garments, and `photo` contributes **0 bytes** of
   it — so Phase 1 did not regress DoD #4. The `reconUrl` term that actually
   fails it remains untouched and is still Phase 3's job.
+
+### Phase 2 — job queue + recon cache + honest progress — CODE COMPLETE, GATE OPEN
+
+Scope as built:
+
+| Piece | File |
+| --- | --- |
+| Serial executor (concurrency 1, FIFO, cancel/retry, never rejects) | `src/services/jobQueue.ts` |
+| React projection + interrupted-job handoff across reload | `src/store/jobsStore.ts` |
+| Content-addressed recon cache (memory LRU + IDB) | `src/services/reconCache.ts` |
+| Second IDB store `reconCache`, DB v1→v2 | `src/services/blobStore.ts` |
+| Policy only: cache-check → enqueue → mirror `reconStatus` | `src/store/appStore.ts` |
+| `signal` / `onStage` hooks (additive) | `src/services/garmentRecon.ts` |
+| Honest banner above the nav, Cancel/Try again | `src/components/JobBanner.tsx` |
+| Elapsed-time tick | `src/lib/useElapsed.ts` |
+| Per-record job selectors on the tile + detail sheet | `src/components/GarmentPhoto.tsx`, `src/screens/Closet.tsx` |
+
+Static verification, all re-run on this machine:
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | **0 errors** |
+| `npm test` (Vitest) | **34 passed**, 0 skipped, no `.only` |
+| `npm run build` | exit 0; 1805 modules; **3 warnings = the exact `docs/BASELINE.md` baseline**, no new ones |
+
+The unit suite covers the three promises the gate rests on — serial/FIFO
+(never two remote calls in flight), cancel (a queued job makes **zero** calls,
+a running job is aborted, and neither is ever reported as a failure), and
+never-rejects (a throwing job settles as `failed` without breaking the enqueue
+caller) — plus stage propagation, the interrupted-job handoff (read-once,
+capped at one resume) and cache-key derivation.
+
+**The device gate is NOT closed.** The three claims that only on-device
+evidence can settle — identical re-import = 0 calls, kill-mid-recon resumes at
+most one job, and the banner/UI staying responsive during a batch — are
+implemented and reviewed but unmeasured. Reasons, in order of impact:
+
+- **No stable device link.** The handset was reachable over WiFi ADB only, and
+  the TLS transport dropped repeatedly mid-session (twice mid-probe), after
+  which the phone left the network entirely. This is the one escalation the
+  handoff reserves for a human: a USB-attached device, or a stable ADB link.
+- **A long-lived Vite dev server is unusable on this host.** Launched detached
+  in four different ways (`Start-Process`, `start /b`, WMI, a scheduled task)
+  it served the first one or two requests and then stopped responding while
+  still holding the port and the process — a failure mode that looks healthy
+  from the outside and silently invalidates any measurement taken through it.
+  `tools/run-probe.mjs` was added to remove the variable by owning the dev
+  server in-process: it starts Vite, drives the device over CDP, and tears the
+  server down, so a stale server cannot outlive a run.
+- `tools/cdp-eval.mjs` now honours `CDP_PORT`. The hardcoded `9222` attached to
+  an unrelated browser already listening on this machine — it drove a different
+  project's dev server, which looked like a broken app rather than a wrong
+  target.
+
+Re-run when a device is attached and stable:
+`node tools/run-probe.mjs tools/probe-jobs-a.mjs` (then `-b`, `-c`,
+`probe-kill.mjs`). Probe A intercepts egress, so the shared 4/day recon quota
+is not spent.
 
 
 

@@ -456,8 +456,20 @@ export async function tagGarmentPhoto(
   return tagGarmentHeuristic(file, blob, pixelTruth);
 }
 
-/** Convert TaggingResult to garment fields. The store mints the id/createdAt. */
-export function taggingToGarment(t: TaggingResult, imageDataUrl?: string): Omit<Garment, "id" | "createdAt"> {
+/**
+ * Convert TaggingResult to garment fields. The store mints the id/createdAt.
+ *
+ * `sha256` is the prepared-image content hash from the import pipeline
+ * (`PreparedImage.sha256`). It rides along so reconstruction can be cached by
+ * source content (see `services/reconCache.ts`) — re-importing identical
+ * bytes must not spend a second remote call. Optional because manual/legacy
+ * records have no hash; those fall back to a length-based cache key.
+ */
+export function taggingToGarment(
+  t: TaggingResult,
+  imageDataUrl?: string,
+  sha256?: string
+): Omit<Garment, "id" | "createdAt"> {
   return {
     name: t.name,
     category: t.category,
@@ -470,5 +482,6 @@ export function taggingToGarment(t: TaggingResult, imageDataUrl?: string): Omit<
     formality: t.formality,
     kind: t.category === "accessory" ? (t.tags.find((tag) => ["scarf", "cap", "bag"].includes(tag)) as any) : undefined,
     photo: imageDataUrl,
+    photoSha256: sha256 || undefined,
   };
 }

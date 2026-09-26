@@ -21,6 +21,13 @@ import type {
 } from "../types";
 import { DEMO_OUTFITS, getDemoWardrobe } from "../lib/mock";
 import { markStage } from "../lib/telemetry";
+import { enqueue, isActive, subscribe as subscribeJobs } from "../services/jobQueue";
+import {
+  lookupRecon,
+  putRecon,
+  reconCacheKey,
+} from "../services/reconCache";
+import { INTERRUPTED_ERROR, readInterruptedJobs } from "./jobsStore";
 import { fetchWeather } from "../services/weather";
 import { generateStyle } from "../services/stylist";
 import { ensureRendering } from "../services/studioRender";
@@ -276,8 +283,14 @@ function mergeSchedules(current: Schedule[], fetched: Schedule[]): Schedule[] {
 // secret-holding `recon-garment` Edge Function (never from the browser
 // bundle). Serialised so a bulk upload can't burst the free ZeroGPU quota.
 // Failures land on `reconStatus: "failed"` — photo + SVG skeleton untouched.
-const reconInFlight = new Set<string>();
-let reconChain: Promise<void> = Promise.resolve();
+//
+// Phase 2: execution left this file. `services/jobQueue.ts` owns the serial
+// lane, cancellation and retry; `services/reconCache.ts` owns content-
+// addressed results. What stays here is POLICY — whether a job is allowed to
+// exist at all (category gate, no cached result, photo present) and how its
+// outcome lands on the garment record. The old `reconInFlight` Set and
+// `reconChain` promise are deliberately gone: `isActive(id)` reads the queue's
+// real state instead of a second bookkeeping copy that could drift.
 
 /** Patch one garment (and its look/today snapshot copies) by id. */
 function applyReconPatch(
@@ -314,98 +327,140 @@ function applyReconPatch(
 }
 
 function runReconJob(id: string): void {
-  if (reconInFlight.has(id)) return;
   const snapshot = useAppStore.getState().garments.find((g) => g.id === id);
   // No source to reconstruct (manual entry), or recon already cached —
   // never re-generate on view. Retry path re-enters via retryRecon.
   if (!snapshot || snapshot.reconUrl) return;
   if (!snapshot.photo) return;
-  reconInFlight.add(id);
-  const enqueuedAt = performance.now();
-  reconChain = reconChain.then(async () => {
-    try {
-      // Phase 0 timings: how long a job waits in the serial lane before it
-      // starts, then each stage of the pipeline itself. A large `wait` here
-      // is the free-ZeroGPU serialisation showing up in the UI.
-      markStage(
-        "recon:lane-start",
-        `garment=${id} waited=${(performance.now() - enqueuedAt).toFixed(0)}ms`
-      );
-      const state = useAppStore.getState();
-      const current = state.garments.find((g) => g.id === id);
-      if (!current) return;
-      const { analyzeGarmentPhoto, requestGarmentRecon } = await import(
-        "../services/garmentRecon"
-      );
-      // Analyzer gate BEFORE marking pending: shoes/accessories are
-      // photo-only (no recon model) — photo + SVG skeleton stay the
-      // finish, zero noise, zero quota.
-      const analysis = analyzeGarmentPhoto({
-        garmentId: id,
-        category: current.category,
-        name: current.name,
-      });
-      if (!analysis) return;
-      useAppStore.setState((s) => ({
-        ...applyReconPatch(s, id, { reconStatus: "pending" as const, reconError: undefined }),
-      }));
-      const renderer: "klein" | "tryoff" = current.hasPrint ? "klein" : "tryoff";
-      markStage("recon:request", `garment=${id} renderer=${renderer}`);
-      const outcome = await requestGarmentRecon({
-        garmentId: id,
-        reconClass: analysis.reconClass,
-        photoDataUrl: current.photo,
+  // One job per garment, enforced by the queue itself (not a local Set).
+  if (isActive(id)) return;
+
+  enqueue({
+    id,
+    kind: "recon",
+    label: snapshot.name || "Garment",
+    run: async ({ signal, onStage }) => {
+      try {
+        const current = useAppStore.getState().garments.find((g) => g.id === id);
+        if (!current || !current.photo) return;
+        const { analyzeGarmentPhoto, requestGarmentRecon, RECON_SEED } =
+          await import("../services/garmentRecon");
+
+        // Analyzer gate BEFORE any cache or network work: shoes/accessories
+        // are photo-only (no recon model) — photo + SVG skeleton stay the
+        // finish, zero noise, zero quota. No stage text: nothing is happening.
+        const analysis = analyzeGarmentPhoto({
+          garmentId: id,
+          category: current.category,
+          name: current.name,
+        });
+        if (!analysis) return;
+
         // Hybrid router: print garments → Klein detail renderer, plain →
         // TryOffDiff (Track 2 verdict — Klein keeps graphics but invents
         // details on plain pieces, so the wearer decides via hasPrint).
-        renderer,
-        name: current.name,
-      });
-      markStage("recon:responded", `garment=${id} status=${outcome.status}`);
-      if (outcome.status === "ready") {
-        const url = outcome.reconDataUrl;
-        try {
-          saveBlob(id, "recon", url);
-        } catch {
-          /* best-effort */
+        const renderer: "klein" | "tryoff" = current.hasPrint ? "klein" : "tryoff";
+
+        // Content-addressed lookup. A hit means these exact source bytes
+        // already produced a render for this renderer/class/seed — reuse it
+        // and spend ZERO remote calls. That is what makes re-import free.
+        const key = reconCacheKey({
+          sha256: current.photoSha256,
+          bytes: current.photo.length,
+          renderer,
+          reconClass: analysis.reconClass,
+          seed: RECON_SEED,
+        });
+        onStage("Checking for a cached render…");
+        const cached = await lookupRecon(key);
+        if (signal.aborted) return;
+        if (cached) {
+          markStage("recon:cached", `garment=${id} renderer=${renderer}`);
+          try {
+            saveBlob(id, "recon", cached);
+          } catch {
+            /* best-effort */
+          }
+          useAppStore.setState((s) => ({
+            ...applyReconPatch(s, id, {
+              reconUrl: cached,
+              reconStatus: "ready" as const,
+              reconError: undefined,
+              reconRenderer: renderer,
+            }),
+          }));
+          onStage("Reused a cached render");
+          return;
         }
+
+        // Only now is a real call certain, so only now mark pending. Marking
+        // earlier is what made cache hits and cancels flash a bogus spinner.
         useAppStore.setState((s) => ({
           ...applyReconPatch(s, id, {
-            reconUrl: url,
-            reconStatus: "ready" as const,
+            reconStatus: "pending" as const,
             reconError: undefined,
-            reconRenderer: renderer,
           }),
         }));
-      } else if (outcome.status === "failed") {
-        // API fail / timeout / function not deployed: don't block anything —
-        // save for retry from the Closet detail sheet.
-        console.warn("garment-recon deferred:", outcome.error);
+        markStage("recon:request", `garment=${id} renderer=${renderer}`);
+        const outcome = await requestGarmentRecon({
+          garmentId: id,
+          reconClass: analysis.reconClass,
+          photoDataUrl: current.photo,
+          renderer,
+          name: current.name,
+          // Additive Phase 2 hooks: queue cancellation + honest progress.
+          signal,
+          onStage,
+        });
+        markStage("recon:responded", `garment=${id} status=${outcome.status}`);
+        if (outcome.status === "ready") {
+          const url = outcome.reconDataUrl;
+          // Cache before persisting: the render is now reusable *by content*,
+          // which is what makes a later re-import of the same photo free.
+          putRecon(key, url);
+          try {
+            saveBlob(id, "recon", url);
+          } catch {
+            /* best-effort */
+          }
+          useAppStore.setState((s) => ({
+            ...applyReconPatch(s, id, {
+              reconUrl: url,
+              reconStatus: "ready" as const,
+              reconError: undefined,
+              reconRenderer: renderer,
+            }),
+          }));
+        } else if (outcome.status === "failed") {
+          // API fail / timeout / function not deployed: don't block anything —
+          // save for retry from the Closet detail sheet or the banner.
+          console.warn("garment-recon deferred:", outcome.error);
+          useAppStore.setState((s) => ({
+            ...applyReconPatch(s, id, {
+              reconStatus: "failed" as const,
+              reconError: outcome.error,
+            }),
+          }));
+        } else {
+          // "skipped" — cancelled / mock-mode / budget spent / no source.
+          // Clear the pending mark so the tile rests on photo/SVG with no
+          // pill. A cancel in particular is a user action, never a failure.
+          useAppStore.setState((s) => ({
+            ...applyReconPatch(s, id, { reconStatus: undefined, reconError: undefined }),
+          }));
+        }
+      } catch (e) {
+        // The queue catches whatever escapes `run`, but only the garment
+        // record knows what "pending" was supposed to become. Keep it honest.
+        console.warn("garment-recon deferred:", e);
         useAppStore.setState((s) => ({
           ...applyReconPatch(s, id, {
             reconStatus: "failed" as const,
-            reconError: outcome.error,
+            reconError: e instanceof Error ? e.message : String(e),
           }),
         }));
-      } else {
-        // "skipped" (mock-mode / budget spent / no source): clear the
-        // pending mark so the tile rests on photo/SVG with no pill — a
-        // later session can still run it.
-        useAppStore.setState((s) => ({
-          ...applyReconPatch(s, id, { reconStatus: undefined, reconError: undefined }),
-        }));
       }
-    } catch (e) {
-      console.warn("garment-recon deferred:", e);
-      useAppStore.setState((s) => ({
-        ...applyReconPatch(s, id, {
-          reconStatus: "failed" as const,
-          reconError: e instanceof Error ? e.message : String(e),
-        }),
-      }));
-    } finally {
-      reconInFlight.delete(id);
-    }
+    },
   });
 }
 
@@ -468,6 +523,39 @@ async function rehydrateBlobs(): Promise<void> {
 }
 
 /* Retired: pumpClosetUpgrade — no batch upgrade concept remains. */
+
+/* ---------------- cancel → garment reconciliation (once) --------------- */
+//
+// A job cancelled while still QUEUED never enters `run`, so nothing in the run
+// body clears the garment's `pending` mark, and the tile would keep claiming
+// "Reconstructing…" for work that will now never happen. Cancellation is a
+// queue-level action, so the queue's own settle event is the right place to
+// notice it — this also covers any future caller that cancels directly.
+//
+// Running-job cancels are cleared by the run body itself (a cancelled request
+// resolves as `skipped`), and this handler is idempotent, so the two paths
+// cannot fight: it only acts while the record still says "pending".
+
+let cancelReconcileInstalled = false;
+
+function installCancelReconciliation(): void {
+  if (cancelReconcileInstalled) return;
+  cancelReconcileInstalled = true;
+  subscribeJobs((e) => {
+    if (e.type !== "settled") return;
+    if (e.job.status !== "cancelled" || e.job.kind !== "recon") return;
+    const g = useAppStore.getState().garments.find((x) => x.id === e.job.id);
+    if (!g || g.reconUrl || g.reconStatus !== "pending") return;
+    useAppStore.setState((s) => ({
+      ...applyReconPatch(s, e.job.id, {
+        reconStatus: undefined,
+        reconError: undefined,
+      }),
+    }));
+  });
+}
+
+if (typeof window !== "undefined") installCancelReconciliation();
 
 export const useAppStore = create<AppStore>()(
   persist(
@@ -564,19 +652,31 @@ export const useAppStore = create<AppStore>()(
           /* rehydrate is best-effort */
         }
         markStage("boot:rehydrate-end");
-        // Resume recon jobs interrupted by a reload (persisted as
-        // "pending"): the photo/SVG skeleton is already on screen, recon
-        // just lands when it completes. "failed" waits for manual retry so
-        // a reload storm can never burst the free quota.
+        // Resume recon jobs interrupted by a reload. The queue recorded what
+        // was genuinely in flight when the page went away (jobsStore listens
+        // for `pagehide`), so this is evidence-based instead of guessed:
+        // those garments are marked failed with an honest reason — the job
+        // really did not finish — and at most ONE, the most recent, is
+        // resumed. A stale "pending" with no queue record is cleared rather
+        // than turning into an unrequested burst against the free quota.
         try {
+          const interrupted = readInterruptedJobs();
+          const toResume = interrupted?.ids[0];
           for (const g of get().garments) {
-            if (
-              g.reconStatus === "pending" &&
-              !g.reconUrl &&
-              g.photo
-            ) {
-              runReconJob(g.id);
-            }
+            if (g.reconStatus !== "pending" || g.reconUrl) continue;
+            set((s) => ({
+              ...applyReconPatch(
+                s,
+                g.id,
+                interrupted?.ids.includes(g.id)
+                  ? { reconStatus: "failed" as const, reconError: INTERRUPTED_ERROR }
+                  : { reconStatus: undefined, reconError: undefined }
+              ),
+            }));
+          }
+          if (toResume) {
+            const g = get().garments.find((x) => x.id === toResume);
+            if (g?.photo && !g.reconUrl) runReconJob(toResume);
           }
         } catch {
           /* resume is best-effort */
@@ -909,7 +1009,7 @@ export const useAppStore = create<AppStore>()(
         // and spent daily budget. Failures return to "failed" with
         // photo/SVG fallbacks.
         const g = get().garments.find((x) => x.id === id);
-        if (!g || g.reconUrl || reconInFlight.has(id)) return;
+        if (!g || g.reconUrl || isActive(id)) return;
         if (!g.photo) return;
         void import("../services/garmentRecon").then(
           ({ reconClassFor, RECON_DAILY_BUDGET, getReconDailyCount }) => {
@@ -946,7 +1046,7 @@ export const useAppStore = create<AppStore>()(
           }),
         }));
         const g = get().garments.find((x) => x.id === id);
-        if (g?.photo && !reconInFlight.has(id)) runReconJob(id);
+        if (g?.photo && !isActive(id)) runReconJob(id);
       },
       /* ---------------- Phase 5 closet upgrade (opt-in) --------------- */
       /* Retired: start/pause/cancel/dismissClosetUpgrade (bulk re-light
