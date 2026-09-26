@@ -48,18 +48,24 @@ const clampFormality = (n: number): Formality =>
  * Upload a garment photo to Supabase Storage (wardrobe bucket).
  * Returns the public URL for storage in wardrobe_items.image_url.
  * Only used in live mode (isSupabaseConfigured === true).
+ *
+ * Accepts a Blob or a data URL. A Blob is passed straight to the storage
+ * client: the old path always went through `fetch(dataUrl).blob()`, which
+ * decoded a multi-megabyte base64 string just to recover the bytes the
+ * caller had handed us in the first place.
  */
 async function uploadGarmentPhoto(
   userId: string,
   garmentId: string,
-  dataUrl: string
+  image: Blob | string
 ): Promise<string> {
   if (!supabase) {
     throw new Error("Supabase not configured");
   }
 
-  // Convert base64 data URL to Blob
-  const blob = await fetch(dataUrl).then((r) => r.blob());
+  // Only a data URL needs materialising; a Blob is already bytes.
+  const blob =
+    typeof image === "string" ? await fetch(image).then((r) => r.blob()) : image;
 
   // Path format: userId/garmentId.jpg - first segment must be userId for RLS
   const path = `${userId}/${garmentId}.jpg`;

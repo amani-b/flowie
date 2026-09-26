@@ -16,7 +16,8 @@ import GarmentCard from "../components/GarmentCard";
 import GarmentPhoto from "../components/GarmentPhoto";
 import Sheet from "../components/Sheet";
 import { LogoMark } from "../components/icons";
-import { tagGarmentPhoto, taggingToGarment, withTimeout, type TaggingResult } from "../services/aiStylistService";
+import { taggingToGarment, withTimeout, type TaggingResult } from "../services/aiStylistService";
+import { startImport, type ImportHandle } from "../services/uploadQueue";
 import { reconClassFor } from "../services/garmentRecon";
 import { markStage } from "../lib/telemetry";
 
@@ -27,7 +28,6 @@ interface PendingGarment extends TaggingResult {
   imageDataUrl?: string;
   fileName: string;
 }
-
 const SHORT_CAT: Record<Category, string> = {
   top: "Top",
   bottom: "Bottom",
@@ -37,9 +37,65 @@ const SHORT_CAT: Record<Category, string> = {
   accessory: "Extra",
 };
 
+/* ------------------------- review stash (survives close) ------------------------- */
+
+/**
+ * The add sheet unmounts its children when closed, and the import outlives
+ * the sheet by design. So the review list cannot live in component state:
+ * a batch analysed with review enabled would finish into a component that no
+ * longer exists, and the wearer's corrections would vanish.
+ *
+ * This module-level stash is the handoff. The queue writes here when it
+ * finishes; the sheet reads it on mount and re-opens itself. It holds at
+ * most one batch — a new import replaces it — and holds image data URLs
+ * only while review is on, which is the opt-in path.
+ */
+let reviewStash: PendingGarment[] | null = null;
+const reviewListeners = new Set<() => void>();
+
+const notifyReviewListeners = () => {
+  for (const fn of reviewListeners) fn();
+};
+
+export const setReviewStash = (items: PendingGarment[] | null) => {
+  reviewStash = items;
+  notifyReviewListeners();
+};
+
+export const takeReviewStash = (): PendingGarment[] | null => {
+  const items = reviewStash;
+  reviewStash = null;
+  return items;
+};
+
+export const peekReviewStash = (): PendingGarment[] | null => reviewStash;
+
+export const subscribeReview = (fn: () => void): (() => void) => {
+  reviewListeners.add(fn);
+  return () => {
+    reviewListeners.delete(fn);
+  };
+};
+
 /* ------------------------------ add form ------------------------------ */
 
-/** AI-powered garment upload with confirmation step */
+/**
+ * AI-powered garment upload.
+ *
+ * The import itself lives in `services/uploadQueue` — this component is only
+ * the picker plus an optional review step. Two deliberate changes from the
+ * old inline loop:
+ *
+ * - **The sheet closes on Analyse.** Decoding and tagging a photo takes
+ *   seconds; holding the wearer in a modal for the whole batch (with a
+ *   spinner they could not escape) was the complaint. Work continues in the
+ *   background, items land in the closet as they finish, and the sheet
+ *   returns to file-picking straight away.
+ * - **Review is opt-in, default off.** The old flow always paused on a
+ *   confirm screen; most imports are "these are my new things, save them",
+ *   so the common path now saves directly and still allows full manual
+ *   correction when wanted.
+ */
 function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
   const addGarment = useAppStore((s) => s.addGarment);
   const notify = useAppStore((s) => s.notify);
@@ -48,14 +104,29 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
   const [pending, setPending] = useState<PendingGarment[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(0);
-  // Set on Cancel; workers check it between steps and stop pulling files.
-  const cancelRef = useRef(false);
+  const [review, setReview] = useState(false);
+  // Live handle on the running import so "Stop" really aborts it, and so
+  // the ref stays valid after this component unmounts (the sheet closes
+  // immediately, but the import does not).
+  const handleRef = useRef<ImportHandle | null>(null);
 
   const cancelAnalysis = () => {
-    cancelRef.current = true;
+    handleRef.current?.cancel();
+    handleRef.current = null;
+    setAnalyzing(false);
   };
 
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // A batch that finished while this sheet was closed: pick it up on mount so
+  // the review screen is waiting for them, not silently discarded.
+  useEffect(() => {
+    const stashed = takeReviewStash();
+    if (stashed && stashed.length > 0) {
+      setPending(stashed);
+      setReview(true);
+    }
+  }, []);
 
   const handleFileSelect = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -68,76 +139,70 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
     setFiles((prev) => [...prev, ...newFiles]);
   };
 
-  const analyzeFiles = async () => {
+  /**
+   * Start the import and get out of the wearer's way.
+   *
+   * With review off (the default) the sheet closes here and each item is
+   * saved as it finishes. With review on we still close the sheet — the
+   * pending list is picked up by the review screen when it is ready, so the
+   * modal is never a cage either way.
+   */
+  const analyzeFiles = () => {
     if (files.length === 0) return;
-    markStage("import:analyze-start", `files=${files.length}`);
+    const items = files.map((file) => ({ file, fileName: file.name }));
+    const total = items.length;
+    markStage("import:analyze-start", `files=${total} review=${review}`);
     setAnalyzing(true);
     setProgress(0);
-    cancelRef.current = false;
+    setFiles([]);
 
-    // Two lanes instead of one serial loop: a single slow file no longer
-    // blocks everything behind it, and each file is isolated — a hang or
-    // failure skips that file with a notice instead of jamming the queue.
-    // try/finally guarantees the spinner releases no matter what.
-    const queue = [...files];
-    const results: PendingGarment[] = [];
-    let done = 0;
-    try {
-      const lanes = [0, 1].map(async () => {
-        while (queue.length > 0) {
-          if (cancelRef.current) return;
-          const file = queue.shift()!;
-          try {
-            // Phase 0 timings: `compress` is the main-thread decode/resize
-            // that Phase 1 moves into a worker — it is the expected source of
-            // the long tasks this gate is measuring.
-            markStage("import:compress-start", file.name);
-            const dataUrl = await withTimeout(
-              compressImage(file),
-              35_000,
-              `Reading ${file.name}`
-            );
-            markStage("import:compress-end", file.name);
-            if (cancelRef.current) return;
-            markStage("import:tag-start", file.name);
-            const tags = await withTimeout(
-              tagGarmentPhoto(dataUrl, file.name),
-              60_000,
-              `Analyzing ${file.name}`
-            );
-            markStage("import:tag-end", file.name);
-            results.push({
-              ...tags,
-              tempId: uid("p"),
-              imageDataUrl: dataUrl,
-              fileName: file.name,
-            });
-          } catch (e) {
-            notify(
-              `Skipped ${file.name} — ${e instanceof Error ? e.message : "could not analyze"}`,
-              "err"
-            );
-          } finally {
-            done++;
-            setProgress(Math.round((done / files.length) * 100));
-          }
+    // Collected for the review screen. In the default (non-review) path
+    // these are ignored, but populating them costs nothing and keeps the
+    // toggle honest if it is flipped while a batch is in flight.
+    const collected: PendingGarment[] = [];
+
+    handleRef.current = startImport(items, {
+      onItem: (garment, tags, fileName) => {
+        if (review) {
+          collected.push({ ...tags, tempId: uid("p"), imageDataUrl: garment.photo, fileName });
+        } else {
+          // Optimistic: visible in the closet immediately, and recon /
+          // sync run behind it exactly as before.
+          void addGarment(garment, garment.photo);
         }
-      });
-      await Promise.all(lanes);
-      markStage("import:lanes-done", `results=${results.length}`);
-      // Completion order is nondeterministic across lanes — restore a
-      // stable review list so items don't shuffle between runs.
-      results.sort((a, b) => a.fileName.localeCompare(b.fileName));
-      if (cancelRef.current) {
-        notify("Analysis stopped");
-      }
-      setPending(results);
-    } finally {
-      setAnalyzing(false);
-      setFiles([]);
-      markStage("import:analyze-end");
-    }
+      },
+      onProgress: (done, n) => {
+        setProgress(Math.round((done / Math.max(1, n)) * 100));
+      },
+      onError: (fileName, message) => {
+        notify(`Skipped ${fileName} — ${message}`, "err");
+      },
+      onComplete: (added, n) => {
+        handleRef.current = null;
+        setAnalyzing(false);
+        markStage("import:analyze-end", `added=${added}/${n}`);
+        if (review) {
+          // Completion order is nondeterministic across lanes — restore a
+          // stable review list so items don't shuffle between runs.
+          collected.sort((a, b) => a.name.localeCompare(b.name));
+          // Hand off through the module stash: this component is about to
+          // unmount when the sheet closes, and the review screen reads the
+          // batch back on its next mount.
+          setReviewStash(collected);
+        } else {
+          notify(
+            added === n
+              ? `${added} item${added === 1 ? "" : "s"} added to closet`
+              : `${added} of ${n} added — the rest were skipped`
+          );
+        }
+      },
+    });
+
+    // Close immediately. The import owns itself from here.
+    onDone();
   };
+
 
   const updatePending = (tempId: string, updates: Partial<PendingGarment>) => {
     setPending((prev) => prev.map((p) => (p.tempId === tempId ? { ...p, ...updates } : p)));
@@ -153,6 +218,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
       addGarment(garment);
     });
     notify(`${pending.length} item(s) added to closet`);
+    setPending([]);
     onDone();
   };
 
@@ -321,7 +387,13 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
 
         <div className="flex gap-2 pt-2">
           <button
-            onClick={onCancel}
+            onClick={() => {
+              // Clear the stash too: re-opening the sheet must not resurrect
+              // a batch the wearer just discarded.
+              setReviewStash(null);
+              setPending([]);
+              onCancel();
+            }}
             className="flex-1 rounded-[16px] border border-line py-3 text-[13.5px] font-extrabold text-mut transition active:scale-[0.98]"
           >
             Discard
@@ -386,10 +458,28 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
         )}
       </div>
 
+      {!analyzing && (
+        <label className="flex cursor-pointer items-center gap-2.5 rounded-[14px] border border-line bg-card px-3.5 py-3">
+          <input
+            type="checkbox"
+            checked={review}
+            onChange={(e) => setReview(e.target.checked)}
+            className="h-4 w-4 shrink-0 accent-[var(--accent)]"
+          />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[12px] font-extrabold">Review before saving</span>
+            <span className="block text-[10.5px] leading-snug text-mut">
+              Off: photos go straight to your closet as they finish. On: check the
+              tags first.
+            </span>
+          </span>
+        </label>
+      )}
+
       {analyzing && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="label-micro">AI analyzing…</span>
+            <span className="label-micro">Analyzing…</span>
             <span className="text-[10px] font-bold text-mut">{progress}%</span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-bgdeep">
@@ -401,7 +491,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
             />
           </div>
           <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] text-mut">Reading colors, pattern and fit…</p>
+            <p className="text-[11px] text-mut">You can close this — it keeps going.</p>
             <button
               onClick={cancelAnalysis}
               className="shrink-0 rounded-full border border-line px-3 py-1.5 text-[11px] font-extrabold text-mut transition active:scale-95"
@@ -797,6 +887,24 @@ export default function Closet() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [addOpen, setAddOpen] = useState(false);
+  // True while the sheet is showing a review batch rather than the picker.
+  const [reviewing, setReviewing] = useState(false);
+
+  // The import outlives the sheet, so a review batch can land after the
+  // wearer has already walked away. Re-open on it — otherwise their pending
+  // corrections would sit invisible until they happened to tap + again.
+  useEffect(
+    () =>
+      subscribeReview(() => {
+        if (peekReviewStash()?.length) {
+          setReviewing(true);
+          setAddOpen(true);
+        } else {
+          setReviewing(false);
+        }
+      }),
+    []
+  );
   const [detail, setDetail] = useState<Garment | null>(null);
 
   const filtered = garments.filter((g) => {
@@ -922,7 +1030,14 @@ export default function Closet() {
         <Plus className="h-6 w-6" strokeWidth={2.6} />
       </motion.button>
 
-      <Sheet open={addOpen} onClose={() => setAddOpen(false)} title="Add a piece">
+      <Sheet
+        open={addOpen}
+        onClose={() => {
+          setAddOpen(false);
+          setReviewing(false);
+        }}
+        title={reviewing ? "Review your pieces" : "Add a piece"}
+      >
         <AIUploadForm
           onDone={() => {
             setAddOpen(false);

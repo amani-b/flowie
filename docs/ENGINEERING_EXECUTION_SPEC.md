@@ -508,4 +508,80 @@ to change, edit `docs/IMPLEMENTER_HANDOFF.md` and keep this section as a
 pointer. Phase 7 may refine the handoff file with the as-built decisions, but
 must not fork it back into this section.
 
+## 11. Phase log
+
+### Phase 1 — off-main-thread image pipeline — **GATE PASSED**
+
+Scope as built:
+
+| Piece | File |
+| --- | --- |
+| Worker (OffscreenCanvas decode + encode) | `src/workers/compress.worker.ts` |
+| Main-thread-safe wrapper, worker/main fallback | `src/lib/imagePipeline.ts` |
+| Pixel truth shared with the tagger | `src/lib/pixelSample.ts` |
+| Blob-first import queue, cancel handle | `src/services/uploadQueue.ts` |
+| Sheet closes on start, review opt-in | `src/screens/Closet.tsx` |
+| Colour extraction moved off the import path | `src/services/aiStylistService.ts` |
+
+Measured on the physical device (Brave on `localhost:5174` via
+`adb reverse`, driven through CDP — `tools/cdp-eval.mjs`):
+
+| Measurement | Result |
+| --- | --- |
+| Decode path, 5 real garment photos | **5/5 `worker`** |
+| Main-thread long tasks during import | **0** (max 0 ms) |
+| Worker chunk in the build | `compress.worker-*.js`, 6.17 kB, own chunk |
+| First item visible | **687 ms** (batch still running) |
+| Last item visible | **1966 ms** → 1312 ms spread, 0 errors |
+| Auto-tag category accuracy, real clothing | **4/5** |
+| `photo` bytes in the `fitflow-store` snapshot | **0** (5 imports → snapshot 186 KB) |
+
+The spread is the non-blocking proof: a blocking import would show ~0 ms
+between first and last item.
+
+The 4/5 is a genuine model limitation, not a regression: the photo is a
+hoodie **worn by a person**, and the tagger returned `top` (it also named it
+"Colorblock half-zip hoodie", which is accurate). The four flat-lays were all
+correct. This is exactly the case the opt-in review screen exists for.
+
+### Phase 1 — verification correction (§9 entry, recorded not hidden)
+
+The **first** Phase 1 verification pass was invalid and has been discarded.
+It fed five arbitrary phone camera photos pulled from the device gallery
+(`/sdcard/DCIM/Camera`, the user's personal pictures) into the import
+pipeline. They were not clothing. The auto-tagger obligingly returned three
+confident dark "tops" — `1000027292/91/93`, all `#292f38`-ish, all
+`pattern: solid` — and I initially reported that as a tagging success. It
+proved nothing, and it also put the user's personal photos into a test
+fixture. The re-run used the repo's own garment assets, each inspected by eye
+first:
+
+| Fixture | Source | Truth |
+| --- | --- | --- |
+| `garment-olive-tee.jpg` | `out/pollinations/audit2-4-olive-tee-flat.jpg` | green tee → `top` |
+| `garment-shorts.jpg` | `out/pollinations/audit2-2-shorts-flat.jpg` | black hoodie + white shorts → `bottom` |
+| `garment-hoodie.jpg` | `out/pollinations/audit3-1-hoodie-flat.jpg` | half-zip hoodie, worn → `outerwear` |
+| `garment-polo-shirt.png` | `flatlay-review/spike-r1-upper.png` | yellow polo → `top` |
+| `garment-trousers.png` | `flatlay-review/spike-r2-lower.png` | red trousers → `bottom` |
+
+The three bogus garments were purged from the device store. Scratch assets
+lived in `public/_tmp_photos/` and are now git-ignored and deleted, so a
+future probe cannot silently commit a user's camera roll again. Lesson
+recorded because it is a process failure, not a code failure: a pipeline
+gate is only evidence if the input is the thing the pipeline claims to
+handle. Personal photos are not test fixtures for a wardrobe app.
+
+Two further observations from the corrected run, both non-blocking:
+
+- On the second run Gemini was unreachable and the **designed** heuristic
+  fallback engaged (names became filename-derived, e.g. "garment
+  trousers"). `geminiReady` is true and the key is present, so this was a
+  transient call failure, not a config error. The fallback is the intended
+  behaviour, and it is why the first run's names are richer than the
+  second's. Worth watching in Phase 2, where retry/cancel semantics land.
+- Snapshot is 186 KB with 17 garments, and `photo` contributes **0 bytes** of
+  it — so Phase 1 did not regress DoD #4. The `reconUrl` term that actually
+  fails it remains untouched and is still Phase 3's job.
+
+
 
