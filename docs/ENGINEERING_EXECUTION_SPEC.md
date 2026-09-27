@@ -564,6 +564,31 @@ DECISION = locked. PLANNED = specified, not implemented.
   (including a deleted `lightningcss-linux-x64-musl`) is Phase 3's dependency
   audit, not Phase 4, and remains Phase 6's job.
 
+- PHASE 6 HYGIENE — `node_modules` UNTRACKED (2026-09-27), branch
+  `impl/phases-0-7`, commit `a9208f76`, landed early (before Phase 5) at the
+  user's request. The churn recorded at the end of the Phase 4 entry above is
+  gone. Method: `git rm -r --cached node_modules` — `--cached` only, so every
+  working file is untouched on disk; the commit staged 21,909 deletions and
+  nothing else. Result: tracked files 22,106 → 197; `git ls-files node_modules`
+  = 0; `git status` has zero `node_modules` entries; `git check-ignore` confirms
+  `.gitignore:2:node_modules/` now applies, so a future `npm install` can no
+  longer re-dirty the tree. Dependency resolution re-verified after the change
+  (`zustand 5.0.15`, `vite 6.4.3`). The deleted
+  `lightningcss-linux-x64-musl` noted in the Phase 4 entry is moot — it is
+  untracked now, which is correct for a platform-specific optional binary.
+  Root cause was NOT a stray commit: `node_modules/` was tracked long before it
+  was added to `.gitignore`, and an ignore rule never applies to a path that is
+  already tracked, so the directory was self-perpetuating.
+  Scope was held to `node_modules` deliberately. Still tracked, and still
+  awaiting the explicit untrack-or-leave decision this section calls for:
+  `dist/` (3 build artefacts — also in `.gitignore`, and `dist/index.html`
+  shows as modified after every local build), `phase1-review/` (8),
+  `phase2-review/` (4), `phase3-review/` (12), `flatlay-review/` (2),
+  `references/` (14), `codex_video_stills/` (21). `out/`, `recon-work/` and
+  `flowie-app-handoff.zip` are already untracked (0 tracked each) and need no
+  action; so does the superseded root `HANDOFF.md`, which stays tracked and
+  banner-marked per the entry above.
+
 ## 10. Implementer handoff prompt (single source)
 
 The copy-pasteable handoff prompt lives in exactly one place:
