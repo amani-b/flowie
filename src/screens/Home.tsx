@@ -23,6 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useAppStore } from "../store/appStore";
+import { useGarmentCount, useLookCount, useRecentLooks } from "../store/selectors";
 import { BUCKET_META, cn, firstName, formatTemp, greeting, timeAgo, todayLabel } from "../lib/utils";
 import type { Garment, WeatherIconKind } from "../types";
 import OutfitBoard from "../components/OutfitBoard";
@@ -58,8 +59,11 @@ function outfitPieces(o: Record<string, Garment | undefined>): Garment[] {
 export default function Home() {
   const weather = useAppStore((s) => s.weather);
   const units = useAppStore((s) => s.units);
-  const garments = useAppStore((s) => s.garments);
-  const looks = useAppStore((s) => s.looks);
+  // Narrow selectors: Home renders counts and a 6-item carousel, so it does not
+  // need to re-render when some other garment or the 20th look changes.
+  const garmentCount = useGarmentCount();
+  const lookCount = useLookCount();
+  const recentLooks = useRecentLooks(6);
   const today = useAppStore((s) => s.today);
   const refreshWeather = useAppStore((s) => s.refreshWeather);
   const generateToday = useAppStore((s) => s.generateToday);
@@ -90,11 +94,11 @@ export default function Home() {
 
   // Auto-generate today's outfit on first load if we have garments but no outfit yet
   useEffect(() => {
-    if (garments.length > 0 && !today && weather.status !== "loading") {
+    if (garmentCount > 0 && !today && weather.status !== "loading") {
       void generateToday("casual");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [garments.length, today, weather.status]);
+  }, [garmentCount, today, weather.status]);
 
   const wx = weather.data;
   const WxIcon = wx ? WX_ICON[wx.icon] : Sun;
@@ -241,7 +245,7 @@ export default function Home() {
           <p className="label-micro">Today's look</p>
         </div>
 
-        {garments.length === 0 ? (
+        {garmentCount === 0 ? (
           <div className="py-2 text-center">
             <p className="mt-1 text-[15px] font-extrabold">The rail is empty</p>
             <p className="mx-auto mt-1 max-w-[255px] text-[12.5px] font-medium leading-relaxed text-mut">
@@ -278,7 +282,7 @@ export default function Home() {
                 >
                   <Wand2 className="h-3.5 w-3.5" /> Open the studio
                 </button>
-                {looks.length > 0 && (
+                {lookCount > 0 && (
                   <button
                     onClick={() => setTab("looks")}
                     className="flex items-center gap-1.5 rounded-full border border-line px-4 py-2.5 text-[12.5px] font-extrabold text-mut transition active:scale-95"
@@ -340,11 +344,11 @@ export default function Home() {
         className="flex items-center gap-2 px-1"
       >
         <span className="text-[11.5px] font-extrabold text-mut">
-          <span className="text-ink">{garments.length}</span> pieces
+          <span className="text-ink">{garmentCount}</span> pieces
         </span>
         <span className="h-1 w-1 rounded-full bg-linestrong" />
         <span className="text-[11.5px] font-extrabold text-mut">
-          <span className="text-ink">{looks.length}</span> saved looks
+          <span className="text-ink">{lookCount}</span> saved looks
         </span>
         <span className="h-1 w-1 rounded-full bg-linestrong" />
         <span className="text-[11.5px] font-extrabold text-mut">
@@ -356,7 +360,7 @@ export default function Home() {
       </motion.div>
 
       {/* recent looks */}
-      {looks.length > 0 && (
+      {lookCount > 0 && (
         <motion.section
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
@@ -372,7 +376,7 @@ export default function Home() {
             </button>
           </div>
           <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4 pb-1">
-            {looks.slice(0, 6).map((look) => (
+            {recentLooks.map((look) => (
               <button
                 key={look.id}
                 onClick={() => setTab("looks")}

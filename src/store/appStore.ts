@@ -56,6 +56,14 @@ import {
   pruneBlobs,
   saveBlob,
 } from "../services/blobStore";
+import {
+  analyzeGarmentPhoto,
+  requestGarmentRecon,
+  RECON_SEED,
+  reconClassFor,
+  RECON_DAILY_BUDGET,
+  getReconDailyCount,
+} from "../services/garmentRecon";
 
 interface WeatherState {
   status: LoadStatus;
@@ -184,7 +192,33 @@ const EMPTY_DATA = {
   generation: IDLE_GEN,
 };
 
-// Safe storage wrapper that catches localStorage quota errors
+// Safe storage wrapper that catches localStorage quota errors.
+//
+// Writes are DEBOUNCED (250 ms trailing). Zustand persists the whole snapshot
+// synchronously on EVERY `set`, and a recon batch or a progress tick mutates
+// the store repeatedly in quick succession — so the raw behaviour was a full
+// JSON.stringify of the closet per mutation. Coalescing bursts to one write per
+// 250 ms keeps the main thread free without changing what is persisted.
+//
+// The pending write is flushed on `pagehide` (the one event that reliably fires
+// on a mobile PWA/WebView kill, and the same event the interrupted-job handoff
+// already relies on). That matters more than the debounce itself: without a
+// flush, closing the tab inside the debounce window would silently drop the
+// user's last change.
+const WRITE_DEBOUNCE_MS = 250;
+
+/**
+ * Dev-time budget for the persisted snapshot (Phase 3 gate).
+ *
+ * 100 KB, matching the spec's DoD #4. The measured worst case after v13 is
+ * ~9 KB at 40 reconned garments, so this is a ~11× margin — the point is not
+ * to ride close to the line but to fail loudly the moment image bytes start
+ * leaking back in, which is a ~600× jump, not a gradual drift.
+ */
+const SNAPSHOT_BUDGET_BYTES = 102_400;
+
+const isDev = import.meta.env.DEV;
+
 const safeStorage = {
   getItem: (name: string) => {
     try {
@@ -196,22 +230,96 @@ const safeStorage = {
     }
   },
   setItem: (name: string, value: { state: unknown; version?: number }) => {
-    try {
-      localStorage.setItem(name, JSON.stringify(value));
-    } catch (e) {
-      // QuotaExceededError or other storage failure — degrade gracefully
-      console.error("localStorage.setItem failed — storage may be full:", e);
-      // Don't rethrow; let the app continue working in-memory
-    }
+    pendingWrites.set(name, value);
+    if (writeTimer !== null) clearTimeout(writeTimer);
+    writeTimer = setTimeout(() => {
+      writeTimer = null;
+      flushPendingWrites();
+    }, WRITE_DEBOUNCE_MS);
   },
   removeItem: (name: string) => {
     try {
+      pendingWrites.delete(name);
       localStorage.removeItem(name);
     } catch (e) {
       console.warn(`localStorage.removeItem("${name}") failed:`, e);
     }
   },
 };
+
+/** Latest snapshot per key, awaiting the debounce window. */
+const pendingWrites = new Map<string, { state: unknown; version?: number }>();
+let writeTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Write every pending snapshot now. Safe to call when nothing is pending. */
+export function flushPendingWrites(): void {
+  if (writeTimer !== null) {
+    clearTimeout(writeTimer);
+    writeTimer = null;
+  }
+  for (const [name, value] of pendingWrites) {
+    let payload: string;
+    try {
+      payload = JSON.stringify(value);
+    } catch (e) {
+      console.warn(`serialising "${name}" failed:`, e);
+      continue;
+    }
+    if (isDev) assertSnapshotBudget(name, payload);
+    try {
+      localStorage.setItem(name, payload);
+    } catch (e) {
+      // QuotaExceededError or other storage failure — degrade gracefully.
+      // Don't rethrow; let the app continue working in-memory.
+      console.error("localStorage.setItem failed — storage may be full:", e);
+    }
+  }
+  pendingWrites.clear();
+}
+
+/**
+ * Dev-only guard: warn loudly if image bytes have crept back into the snapshot.
+ *
+ * Two separate signals, because they fail differently:
+ *   - `data:image` present → the encoding regression. This is the one that
+ *     matters; it is what took the snapshot to 5.8 MB and it trips the moment
+ *     a `partialize`/strip rule is loosened.
+ *   - total size over budget → the accumulation regression, e.g. a new heavy
+ *     field on every garment.
+ *
+ * `console.warn`, not a throw: a dev-time integrity check that crashes the app
+ * is worse than the leak it reports, and the same store object is used by the
+ * test suite where this runs under `jsdom` with a real localStorage.
+ */
+export function assertSnapshotBudget(name: string, payload: string): void {
+  const bytes = new TextEncoder().encode(payload).length;
+  const leakIndex = payload.indexOf("data:image");
+  if (leakIndex !== -1) {
+    const at = payload.slice(Math.max(0, leakIndex - 60), leakIndex + 40);
+    console.warn(
+      `[fitflow-store] image bytes leaked into the persisted snapshot ` +
+        `(found "data:image"). Phase 3 requires http(s) refs + IDB keys only. ` +
+        `Context: …${at}…`
+    );
+  }
+  if (bytes > SNAPSHOT_BUDGET_BYTES) {
+    console.warn(
+      `[fitflow-store] snapshot "${name}" is ${bytes} bytes, over the ` +
+        `${SNAPSHOT_BUDGET_BYTES}-byte budget (${(bytes / 1024).toFixed(1)} KB). ` +
+        `Check partialize/stripImageBytes for a field carrying image bytes.`
+    );
+  }
+}
+
+if (typeof window !== "undefined") {
+  // `pagehide` covers tab close / app switch / WebView kill. `visibilitychange`
+  // is the belt-and-braces path for mobile browsers that background without a
+  // pagehide. Both are cheap and idempotent.
+  window.addEventListener("pagehide", flushPendingWrites);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushPendingWrites();
+  });
+}
 
 export function applyThemeToDom(theme: ThemeMode) {
   document.documentElement.classList.toggle("dark", theme === "dark");
@@ -326,6 +434,68 @@ function applyReconPatch(
   };
 }
 
+/**
+ * Drop `data:` image bytes from a record bound for `localStorage`, keeping
+ * remote references.
+ *
+ * Why this exists: the persisted snapshot must contain no `data:image` bytes
+ * (DoD #4). Two fields were carrying them:
+ *   - `reconUrl` — a ~140 KB recon PNG data URL, the dominant term (measured
+ *     at 5.8 MB for 40 reconned garments, 57× the budget);
+ *   - `rendering` — a ~5 KB inline SVG data URL. Small per item, but it is
+ *     what pushes the *no-recon* closet over budget (225 KB @ 40 garments).
+ *
+ * Both are recoverable without them: `recon` bytes live in IndexedDB under the
+ * garment id (and again by content hash in the recon cache), and the SVG
+ * `rendering` is regenerated deterministically by `ensureRendering`/
+ * `renderingFor` from the record's own fields. So stripping them is lossless
+ * for display and merely removes a redundant copy.
+ *
+ * `http(s)` URLs are KEPT — for `reconUrl`, `rendering` AND `photo`. That is not
+ * a convenience: in live mode a garment synced from Postgres arrives with
+ * `photo = wardrobe_items.image_url` (see `dataService.rowToGarment`), i.e. a
+ * Storage URL. Stripping every `photo` unconditionally destroyed the only copy
+ * the client has of that reference — the bytes were `data:` (correctly dropped
+ * at upload), but the URL pointing at them is the canonical remote handle, and
+ * `Closet`'s "Original photo" disclosure reads `g.photo` directly. Keeping it
+ * costs ~60 bytes and avoids a needless re-fetch.
+ *
+ * The rule is therefore about the ENCODING, not the field name: anything
+ * `data:` goes, anything `http(s):` stays.
+ */
+function stripImageBytes<T>(g: T): T {
+  if (!g || typeof g !== "object") return g;
+  const next: Record<string, unknown> = { ...(g as Record<string, unknown>) };
+  // `photo` is the local import source; it is a data URL in demo/offline mode
+  // and an http(s) Storage URL in live mode.
+  if (typeof next.photo === "string" && next.photo.startsWith("data:")) {
+    next.photo = undefined;
+  }
+  if (typeof next.reconUrl === "string" && next.reconUrl.startsWith("data:")) {
+    // `reconStatus` stays "ready": the render genuinely exists, it is in IDB.
+    // Clearing the status would make the tile look like it never succeeded and
+    // `runReconJob` would then consider it eligible for a fresh remote call —
+    // the exact quota waste Phase 2 removed.
+    next.reconUrl = undefined;
+  }
+  if (typeof next.rendering === "string" && next.rendering.startsWith("data:")) {
+    next.rendering = undefined;
+  }
+  return next as T;
+}
+
+/** `stripImageBytes` across an outfit map (looks / today snapshots). */
+function stripOutfitImages<T>(o: T): T {
+  if (!o || typeof o !== "object") return o;
+  const src = o as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  for (const k of Object.keys(src)) {
+    const piece = src[k];
+    next[k] = piece && typeof piece === "object" ? stripImageBytes(piece) : piece;
+  }
+  return next as T;
+}
+
 function runReconJob(id: string): void {
   const snapshot = useAppStore.getState().garments.find((g) => g.id === id);
   // No source to reconstruct (manual entry), or recon already cached —
@@ -343,8 +513,6 @@ function runReconJob(id: string): void {
       try {
         const current = useAppStore.getState().garments.find((g) => g.id === id);
         if (!current || !current.photo) return;
-        const { analyzeGarmentPhoto, requestGarmentRecon, RECON_SEED } =
-          await import("../services/garmentRecon");
 
         // Analyzer gate BEFORE any cache or network work: shoes/accessories
         // are photo-only (no recon model) — photo + SVG skeleton stay the
@@ -475,46 +643,31 @@ function runReconJob(id: string): void {
  * garment from the Closet detail sheet. No batch concept remains. */
 
 /**
- * Merge IndexedDB image blobs back into the lean in-memory state.
- * Never rejects: a missing blob just leaves the photo/SVG fallback
- * showing (always correct). Also backfills IDB from any in-state
- * `data:` blobs and prunes blobs for deleted garments. Await it before
- * resuming pending jobs so photo-gated resume sees its sources.
+ * Reconcile IndexedDB with the current closet at boot — WITHOUT loading bytes.
+ *
+ * What this deliberately no longer does: merge every garment's photo + recon
+ * back into the store. That was O(closet) IO before first paint and re-inflated
+ * megabytes of image data into the very state the persister walks on every
+ * mutation, which is the RC-4 cost Phase 3 exists to remove. Tiles now resolve
+ * their own image on demand (`services/imageCache.ts`), so boot has no reason
+ * to know any garment's bytes.
+ *
+ * What remains is the part that is genuinely boot-shaped:
+ *   - BACKFILL: a record that still holds an in-state `data:` blob (an import
+ *     that happened before a reload, or a legacy snapshot) gets it written to
+ *     IDB, so the durable copy exists before the in-memory one is dropped.
+ *   - PRUNE: blobs whose garment is gone are deleted, so the store cannot grow
+ *     without bound across add/remove cycles.
+ *
+ * Never rejects: a missing blob just leaves the photo/SVG fallback showing.
  */
-async function rehydrateBlobs(): Promise<void> {
+async function reconcileBlobsAtBoot(): Promise<void> {
   try {
-    const { loadAllBlobs } = await import("../services/blobStore").catch(
-      () => ({ loadAllBlobs: null as null | (() => Promise<Map<string, { photo?: string; recon?: string }>>) })
-    );
-    if (!loadAllBlobs) return;
-    const all = await loadAllBlobs().catch(
-      () => new Map<string, { photo?: string; recon?: string }>()
-    );
     const s = useAppStore.getState();
-    // Backfill the store from in-state blobs (lean snapshots omit them).
+    // Backfill IDB from any in-state data: blobs, then prune the orphans.
     for (const g of s.garments) {
       if (g.photo?.startsWith("data:")) saveBlob(g.id, "photo", g.photo);
-      if (g.reconUrl?.startsWith("data:")) {
-        saveBlob(g.id, "recon", g.reconUrl);
-      }
-    }
-    if (all.size > 0) {
-      let changed = false;
-      const garments = s.garments.map((g) => {
-        const pair = all.get(g.id);
-        if (!pair) return g;
-        let next = g;
-        if (!next.photo && pair.photo) {
-          next = { ...next, photo: pair.photo };
-          changed = true;
-        }
-        if (!next.reconUrl && pair.recon) {
-          next = { ...next, reconUrl: pair.recon, reconStatus: "ready" as const };
-          changed = true;
-        }
-        return next;
-      });
-      if (changed) useAppStore.setState({ garments });
+      if (g.reconUrl?.startsWith("data:")) saveBlob(g.id, "recon", g.reconUrl);
     }
     pruneBlobs(new Set(s.garments.map((g) => g.id)));
   } catch {
@@ -647,7 +800,7 @@ export const useAppStore = create<AppStore>()(
         // per-tile resolution.
         markStage("boot:rehydrate-start");
         try {
-          await rehydrateBlobs();
+          await reconcileBlobsAtBoot();
         } catch {
           /* rehydrate is best-effort */
         }
@@ -750,7 +903,7 @@ export const useAppStore = create<AppStore>()(
             // Cloud rows may carry photo URLs the lean snapshot lacks —
             // merge stored composites back so tiles upgrade instantly.
             try {
-              await rehydrateBlobs();
+              await reconcileBlobsAtBoot();
             } catch {
               /* best-effort */
             }
@@ -779,7 +932,7 @@ export const useAppStore = create<AppStore>()(
                 schedules: mergeSchedules(s.schedules, schedules),
               });
               try {
-                await rehydrateBlobs();
+                await reconcileBlobsAtBoot();
               } catch {
                 /* best-effort */
               }
@@ -880,7 +1033,7 @@ export const useAppStore = create<AppStore>()(
         void _incomingId;
         void _incomingAt;
         void _incomingSync;
-        const id = crypto.randomUUID();
+        const id = uid("uuid");
 
         // Normalize incoming garment to ensure colors/pattern are always present
         const normalizedGarment: Garment = ensureRendering({
@@ -1011,24 +1164,20 @@ export const useAppStore = create<AppStore>()(
         const g = get().garments.find((x) => x.id === id);
         if (!g || g.reconUrl || isActive(id)) return;
         if (!g.photo) return;
-        void import("../services/garmentRecon").then(
-          ({ reconClassFor, RECON_DAILY_BUDGET, getReconDailyCount }) => {
-            if (!reconClassFor(g.category)) {
-              get().notify("Photo is the finish for shoes & extras", "err");
-              return;
-            }
-            if (getReconDailyCount() >= RECON_DAILY_BUDGET) {
-              get().notify("Today's free recon budget is spent — try tomorrow", "err");
-              return;
-            }
-            set((s) => ({
-              garments: s.garments.map((x) =>
-                x.id === id ? { ...x, reconStatus: "pending" as const } : x
-              ),
-            }));
-            runReconJob(id);
-          }
-        );
+        if (!reconClassFor(g.category)) {
+          get().notify("Photo is the finish for shoes & extras", "err");
+          return;
+        }
+        if (getReconDailyCount() >= RECON_DAILY_BUDGET) {
+          get().notify("Today's free recon budget is spent — try tomorrow", "err");
+          return;
+        }
+        set((s) => ({
+          garments: s.garments.map((x) =>
+            x.id === id ? { ...x, reconStatus: "pending" as const } : x
+          ),
+        }));
+        runReconJob(id);
       },
       setGarmentPrint: (id, hasPrint) => {
         // Wearer-set renderer signal (logos/graphics/text → Klein).
@@ -1145,7 +1294,7 @@ export const useAppStore = create<AppStore>()(
       saveLook: async (result, name) => {
         const wx = get().weather.data;
         // Generate stable UUID upfront for sync consistency
-        const id = crypto.randomUUID();
+        const id = uid("uuid");
         const look: SavedLook = {
           id,
           name:
@@ -1246,7 +1395,7 @@ export const useAppStore = create<AppStore>()(
 
       scheduleLook: async (date, lookId) => {
         // Generate stable UUID for the schedule row
-        const id = crypto.randomUUID();
+        const id = uid("uuid");
         const user = get().user;
         
         // Optimistic local update first
@@ -1409,7 +1558,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
         name: "fitflow-store",
-        version: 12,
+        version: 13,
       storage: safeStorage,
       // Rehydrated _syncState arrives as string[] (see partialize); restore
       // Sets so every selector/mutator can treat them uniformly.
@@ -1637,8 +1786,8 @@ export const useAppStore = create<AppStore>()(
         }
         // v9 → v10 (speed): image blobs moved to IndexedDB — localStorage
         // snapshots no longer carry them. Nothing to transform: in-memory
-        // blobs backfill IDB at boot (rehydrateBlobs) and the next persist
-        // write slims itself. (Upgrade-park step retired with v8→v9.)
+        // blobs backfill IDB at boot (reconcileBlobsAtBoot) and the next
+        // persist write slims itself. (Upgrade-park step retired with v8→v9.)
         if (version < 10) {
           const { closetUpgrade: _u, ...rest } = state as Record<string, unknown>;
           void _u;
@@ -1728,52 +1877,61 @@ export const useAppStore = create<AppStore>()(
               : (noUpgrade as any).today,
           };
         }
+        if (version < 13) {
+          // v13: keep image BYTES out of the snapshot entirely.
+          //
+          // Before this, a persisted closet carried `reconUrl` (a ~140 KB PNG
+          // data URL) on every reconned garment and a ~5 KB SVG `rendering`
+          // data URL on every garment regardless. That is 5.8 MB at 40
+          // reconned garments — 57× the 100 KB budget — and the same recon
+          // bytes were ALSO in IndexedDB, so it was a genuine second copy.
+          //
+          // Existing installs already hold those strings, so the strip has to
+          // happen on read as well as on write: `partialize` alone would only
+          // shrink the NEXT write, leaving the first boot after upgrade heavy.
+          // Both fields are recoverable (recon from IDB, rendering regenerated
+          // deterministically), so nothing is lost by dropping them here.
+          const s13 = state as Record<string, any>;
+          state = {
+            ...s13,
+            garments: ((s13.garments ?? []) as any[]).map(stripImageBytes),
+            looks: ((s13.looks ?? []) as any[]).map((l: any) => ({
+              ...l,
+              outfit: stripOutfitImages(l.outfit),
+            })),
+            today: s13.today
+              ? { ...s13.today, outfit: stripOutfitImages(s13.today.outfit) }
+              : s13.today,
+          };
+        }
         return state as never;
       },
       partialize: (s) => ({
         theme: s.theme,
         units: s.units,
-        // Lean snapshots: image blobs live in IndexedDB (see blobStore),
-        // never in localStorage. SVG `rendering` strings (a few KB each)
-        // stay: tiles paint instantly from this snapshot alone, and blobs
-        // merge back silently at boot (rehydrateBlobs). Recon URL strings
-        // stay too (small); recon bytes live in IndexedDB.
-        garments: s.garments.map((g) => ({
-          ...g,
-          photo: undefined,
-        })),
-        // Snapshots carry the SVG rendering as their display image; photo
-        // sources would multiply localStorage usage per snapshot and risk
-        // quota failure. Live garments keep their blobs in IndexedDB instead.
+        // LEAN SNAPSHOTS — no image bytes, ever.
+        //
+        // `partialize` is the last gate before `localStorage`, so the strip
+        // lives here and applies on every write. `photo`, `reconUrl` (when it
+        // is a data URL) and the SVG `rendering` data URL are all removed;
+        // `http(s)` references are kept because they cost nothing and are the
+        // canonical remote copy in live mode.
+        //
+        // What that means at boot: the snapshot says WHICH image a tile should
+        // show, and `services/imageCache.ts` resolves the bytes per tile on
+        // demand (memory → IndexedDB → http). Tiles therefore paint from the
+        // lean record and swap the image in when it lands, instead of the store
+        // re-inflating every garment's bytes before first paint.
+        garments: s.garments.map(stripImageBytes),
         looks: s.looks.map((l) => ({
           ...l,
-          outfit: Object.fromEntries(
-            Object.entries(l.outfit).map(([k, g]) => [
-              k,
-              g
-                ? {
-                    ...g,
-                    photo: undefined,
-                  }
-                : g,
-            ])
-          ) as typeof l.outfit,
+          outfit: stripOutfitImages(l.outfit) as typeof l.outfit,
         })),
         schedules: s.schedules,
         today: s.today
           ? {
               ...s.today,
-              outfit: Object.fromEntries(
-                Object.entries(s.today.outfit).map(([k, g]) => [
-                  k,
-                  g
-                    ? {
-                        ...g,
-                        photo: undefined,
-                      }
-                    : g,
-                ])
-              ) as typeof s.today.outfit,
+              outfit: stripOutfitImages(s.today.outfit) as typeof s.today.outfit,
             }
           : s.today,
         ownerId: s.ownerId,

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Search, Trash2, Wand2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
+import { useLooks } from "../store/selectors";
 import { cn, OCCASION_META, timeAgo } from "../lib/utils";
 import type { Garment, SavedLook } from "../types";
 import OutfitBoard from "../components/OutfitBoard";
@@ -171,7 +172,7 @@ function LookSheet({ look, onClose }: { look: SavedLook | null; onClose: () => v
 }
 
 export default function Looks() {
-  const looks = useAppStore((s) => s.looks);
+  const looks = useLooks();
   const setTab = useAppStore((s) => s.setTab);
   const [sel, setSel] = useState<SavedLook | null>(null);
   const [searchQuery, setSearchQuery] = useState("");

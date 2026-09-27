@@ -29,12 +29,25 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // Separate large vendor libraries into chunks
+          // Separate large vendor libraries into chunks.
+          //
+          // This list is audited against what the app ACTUALLY imports, not
+          // against package.json. It previously named `clsx`, which is never
+          // imported (`cn()` in lib/utils.ts is hand-rolled) — Rollup dropped
+          // the chunk entirely and emitted the BASELINE.md warning about a
+          // named-but-missing module. `uuid` and `date-fns` turned out to be
+          // equally dead: every `uuid` in the source is the string literal in
+          // `uid("uuid")`, and `date-fns` has no import site at all. Naming a
+          // module here that nothing imports produces an EMPTY CHUNK, which
+          // is its own build warning. So: only modules with a real import
+          // path are chunked, and `zustand` (genuinely used by the persist
+          // layer) takes the freed slot — keeping it out of the app chunk
+          // means a store-only change does not invalidate the app bundle.
           'vendor-framer': ['framer-motion'],
           'vendor-supabase': ['@supabase/supabase-js'],
           'vendor-lucide': ['lucide-react'],
           'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-utils': ['clsx', 'uuid', 'date-fns'],
+          'vendor-state': ['zustand'],
         },
       },
     },

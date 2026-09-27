@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { cn } from "../lib/utils";
 import { renderingFor } from "../services/studioRender";
+import { resolveImage } from "../services/imageCache";
 import { useAppStore } from "../store/appStore";
 import { useJobsStore } from "../store/jobsStore";
 import ErrorBoundary from "./ErrorBoundary";
@@ -116,7 +117,35 @@ export default function GarmentPhoto({
   // renderingFor never throws (normalises corrupt records), but the tile is
   // additionally isolated: one poisoned garment shows a fallback tile
   // instead of erasing the whole screen via the top boundary.
-  const src = recon ?? garment.photo ?? garment.rendering ?? renderingFor(garment);
+  const recordSrc = recon ?? garment.photo ?? garment.rendering ?? null;
+  const fallbackSrc = renderingFor(garment);
+
+  // LAZY RESOLUTION. The persisted snapshot carries no image bytes (Phase 3),
+  // so after a reload `reconUrl`/`photo` are simply absent and the bytes live
+  // in IndexedDB under this garment's id. Resolving here — rather than
+  // pre-loading every garment at boot — means a tile pays for exactly one
+  // image, and only once it is actually on screen. `imaging` starts true when
+  // the record has no usable source, so the tile shows the deterministic SVG
+  // (never an empty frame) until the real image lands and swaps in.
+  const [lazySrc, setLazySrc] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const kind = recon ? "recon" : "photo";
+    // A `data:`/`http(s)` value already on the record is returned
+    // synchronously by `resolveImage`, so this is cheap when there is nothing
+    // to fetch and only hits IDB when the record is lean.
+    resolveImage(garment.id, kind, recon ?? garment.photo ?? null).then((found) => {
+      if (!alive) return;
+      setLazySrc((prev) => (found && found !== prev ? found : prev));
+    });
+    return () => {
+      alive = false;
+    };
+    // Re-resolve when the record's own sources change (a recon landing, a new
+    // photo, or a print toggle rebuilding the rendering).
+  }, [garment.id, recon, garment.photo, retryTick]);
+
+  const src = lazySrc ?? recordSrc ?? fallbackSrc;
 
   return (
     <ErrorBoundary

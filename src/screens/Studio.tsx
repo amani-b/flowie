@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangle, ArrowLeftRight, Bookmark, Briefcase, Check, Coffee, Expand, Flame, Info, Plus, RefreshCw, Send, Shirt, Snowflake, Wand2, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
+import { useGarments } from "../store/selectors";
 import { cn, OCCASION_META, VIBE_TO_OCCASION } from "../lib/utils";
 import type { Category, Garment, Occasion, Outfit } from "../types";
 import OutfitBoard from "../components/OutfitBoard";
@@ -71,7 +72,7 @@ const CATEGORY_TO_SLOT: Record<Category, SlotKey> = {
 };
 
 export default function Studio() {
-  const garments = useAppStore((s) => s.garments);
+  const garments = useGarments();
   const generation = useAppStore((s) => s.generation);
   const generateForStudio = useAppStore((s) => s.generateForStudio);
   const setStudioResult = useAppStore((s) => s.setStudioResult);

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Ban, Camera, Loader2, Plus, RotateCcw, Search, Sparkles, Trash2, X } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/appStore";
+import { useGarment, useGarmentIds } from "../store/selectors";
 import { INTERRUPTED_ERROR, useJobsStore } from "../store/jobsStore";
 import { cancel as cancelJob } from "../services/jobQueue";
 import { useElapsedSeconds } from "../lib/useElapsed";
@@ -920,10 +922,34 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
   );
 }
 
+/**
+ * One closet tile, subscribed to ONE garment record.
+ *
+ * This is the shape Phase 3 asks for: the tile renders `useGarment(id)`, so a
+ * store write that touches some other garment — or that touches garments not
+ * at all — cannot re-render it. Previously the screen read the whole array and
+ * mapped over it, so every `applyReconPatch` (one per stage event, per
+ * garment, during a batch) re-rendered every tile in the grid.
+ *
+ * `React.memo` on `GarmentCard` still helps — the parent passes a stable
+ * `onOpen` — but it is the per-record subscription here that makes the
+ * isolation provable rather than merely likely.
+ */
+function ClosetTile({ id, onOpen }: { id: string; onOpen: (g: Garment) => void }) {
+  const garment = useGarment(id);
+  // Drop the tile on the frame the record disappears, rather than rendering a
+  // skeleton that never resolves. `<AnimatePresence>` still gets its exit
+  // animation because the parent keeps the id until the removal settles here.
+  if (!garment) return null;
+  return <GarmentCard garment={garment} onOpen={onOpen} />;
+}
+
 /* ------------------------------- screen ------------------------------- */
 
 export default function Closet() {
-  const garments = useAppStore((s) => s.garments);
+  // Ids, not records: the ids of a garment only change when garments are added
+  // or removed, so a per-garment status tick leaves this list identical.
+  const garmentIds = useGarmentIds();
   const restoreSamples = useAppStore((s) => s.restoreSamples);
 
   const [query, setQuery] = useState("");
@@ -949,18 +975,49 @@ export default function Closet() {
   );
   const [detail, setDetail] = useState<Garment | null>(null);
 
-  const filtered = garments.filter((g) => {
-    const okCat = filter === "all" || g.category === filter;
-    const q = query.trim().toLowerCase();
-    const okQuery =
-      !q ||
-      g.name.toLowerCase().includes(q) ||
-      g.colorFamily.toLowerCase().includes(q);
-    return okCat && okQuery;
-  });
+  /**
+   * The visible ids. Filtering on ids alone would mean resolving every record;
+   * matching needs name/category/colourFamily, so the predicate runs inside a
+   * `useMemo` over the stable id list. The result is `useShallow`-compared by
+   * the array, so re-running the filter with the same outcome is a no-op.
+   */
+  const filteredIds = useMemo(
+    () =>
+      garmentIds.filter((id) => {
+        const g = useAppStore.getState().garments.find((x) => x.id === id);
+        if (!g) return false;
+        const okCat = filter === "all" || g.category === filter;
+        const q = query.trim().toLowerCase();
+        const okQuery =
+          !q ||
+          g.name.toLowerCase().includes(q) ||
+          g.colorFamily.toLowerCase().includes(q);
+        return okCat && okQuery;
+      }),
+    [garmentIds, filter, query]
+  );
 
-  const countFor = (c: Filter) =>
-    c === "all" ? garments.length : garments.filter((g) => g.category === c).length;
+  // Stable identity for the memoised cards: a new function per render would
+  // defeat `React.memo` on GarmentCard and re-render the whole grid anyway.
+  const openDetail = useCallback((g: Garment) => setDetail(g), []);
+
+  const counts = useAppStore(
+    useShallow((s) => {
+      const out: Record<Filter, number> = {
+        all: s.garments.length,
+        top: 0,
+        bottom: 0,
+        dress: 0,
+        outerwear: 0,
+        shoes: 0,
+        accessory: 0,
+      };
+      for (const g of s.garments) out[g.category] += 1;
+      return out;
+    })
+  );
+
+  const countFor = (c: Filter) => counts[c];
 
   return (
     <div className="px-4 pb-44 pt-4">
@@ -970,11 +1027,11 @@ export default function Closet() {
           <h1 className="font-display text-[27px] font-extrabold tracking-tight">Closet</h1>
         </div>
         <span className="mb-1.5 rounded-full border border-line bg-card px-2.5 py-1 text-[11px] font-extrabold text-mut">
-          {garments.length} pieces
+          {counts.all} pieces
         </span>
       </header>
 
-      {garments.length === 0 ? (
+      {counts.all === 0 ? (
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -1033,7 +1090,7 @@ export default function Closet() {
             ))}
           </div>
 
-          {filtered.length === 0 ? (
+          {filteredIds.length === 0 ? (
             <div className="card mt-6 rounded-[20px] px-6 py-10 text-center">
               <p className="text-[14px] font-extrabold">No matches</p>
               <p className="mt-1 text-[12.5px] font-medium text-mut">
@@ -1052,8 +1109,8 @@ export default function Closet() {
           ) : (
             <motion.div layout className="mt-4 grid grid-cols-2 gap-3 min-[420px]:grid-cols-3">
               <AnimatePresence mode="popLayout">
-                {filtered.map((g) => (
-                  <GarmentCard key={g.id} garment={g} onOpen={setDetail} />
+                {filteredIds.map((id) => (
+                  <ClosetTile key={id} id={id} onOpen={openDetail} />
                 ))}
               </AnimatePresence>
             </motion.div>

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { applyThemeToDom, useAppStore } from "./store/appStore";
+import { useIsOnboarded } from "./store/selectors";
 import Ambient from "./components/Ambient";
 import TopBar from "./components/TopBar";
 import BottomNav from "./components/BottomNav";
@@ -211,15 +212,15 @@ function Shell() {
 function AppContent() {
   const authStatus = useAppStore((s) => s.authStatus);
   const user = useAppStore((s) => s.user);
-  const onboardedUsers = useAppStore((s) => s.onboardedUsers);
   const theme = useAppStore((s) => s.theme);
+  // Derived boolean, not the raw `onboardedUsers` array: subscribing to the
+  // array meant every onboarding write re-rendered the whole app shell.
+  const onboarded = useIsOnboarded();
 
   // Keep the DOM class in sync with the persisted theme on boot & change.
   useEffect(() => {
     applyThemeToDom(theme);
   }, [theme]);
-
-  const onboarded = !!user && onboardedUsers.includes(user.id);
 
   return (
     <div className="min-h-dvh">
