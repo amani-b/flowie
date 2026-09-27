@@ -605,6 +605,61 @@ DECISION = locked. PLANNED = specified, not implemented.
   Tracked files after this pair of hygiene commits: 22,106 → 194, and
   `git status` is finally free of modified files.
 
+- PHASE 5 EXECUTED (2026-09-27), branch `impl/phases-0-7`. Capacitor 8 wraps the
+  same Vite build — no second codebase. **Gate met**: `:app:assembleDebug`
+  green, the APK installs and runs on the physical handset, and the full
+  back-button matrix passes 11/11 (`docs/phase5/back-button-matrix.json`,
+  screenshots alongside it). Deps: core/cli 8.5.2, app 8.1.1, haptics 8.0.2,
+  status-bar 8.0.3, android 8.5.2. NOTE: the §5 Phase 5 dep list omits
+  **`@capacitor/android`**, without which `cap add android` fails outright.
+  Five things this phase learned:
+  (1) PHASE 0's TWO OPEN ITEMS ARE RESOLVED, and only one was real. JAVA_HOME
+  was already correct with JDK 21 installed (Adoptium 21.0.11.10); what is stale
+  is PATH `java`, which is **Java 8** — so every Gradle call must pin JAVA_HOME
+  rather than trust PATH. `sdkmanager` is genuinely absent (no cmdline-tools);
+  nothing here needed it, but any future SDK component install will fail.
+  (2) `cap add android` MUST NOT RUN BEFORE `@capacitor/android` IS INSTALLED.
+  It created a partial project under the DEFAULT identity (`namespace
+  com.getcapacitor.myapp`, `applicationId com.getcapacitor.app`, `app_name
+  "My App"`); the retry then refused with "platform already exists", and a later
+  attempt left a second `MainActivity.java` under `app/flowie/` still declaring
+  `package com.getcapacitor.myapp`, so the build died on **duplicate class**.
+  Recovery is `rm -rf android` and re-add, NOT patching — the damage spans
+  build.gradle, strings.xml and three Java files. The regenerated project is
+  correct (`app.flowie` throughout). The template's `ExampleInstrumentedTest`
+  also asserts `com.getcapacitor.app`; corrected to `app.flowie`.
+  (3) `./gradlew assembleDebug` IS THE WRONG TARGET. A bare task name matches
+  every module, so the library modules build AARs, which pulls in
+  `extractDebugAnnotations` and four lint/compiler jars (`lint-checks`,
+  `intellij-core`, `kotlin-compiler`, `groovy`). Use
+  **`./gradlew :app:assembleDebug`** — the app consumes the libraries' classes
+  and never needs their AARs. That took the build from failing to 41s.
+  (4) EDGE-TO-EDGE NEEDS NO CONFIG AND CANNOT BE CONFIGURED. The target is
+  SDK 36, and from Android 15 the platform enforces edge-to-edge, so
+  `StatusBar.overlaysWebView`, `StatusBar.backgroundColor` and
+  `android.backgroundColor` are documented no-ops — deliberately NOT set,
+  because config that reads like it does something is worse than no config.
+  Measured on device: `env(safe-area-inset-top)` = **29px**, `safe-bottom` =
+  **15px** (non-zero only when the WebView really is edge-to-edge), and
+  `innerHeight × dpr` = 2340 = the full screen. Only the status bar *style* is
+  still settable, so it is driven from the app theme and follows dark/light —
+  confirmed by screenshot in both.
+  (5) THE SHEET'S OPEN STATE IS A PROP, SO THE BACK CHAIN NEEDED A REGISTRY.
+  `Sheet` takes `open`/`onClose` from whichever screen rendered it, while the
+  back handler is central and cannot see those local booleans. Rather than push
+  a global "which sheet is open" flag through the store — which every screen
+  would then have to keep in sync — overlays announce themselves to
+  `src/lib/overlayStack.ts` and the handler closes the top one (LIFO).
+  Two harness lessons: on this host a **Node process cannot spawn `adb` at all**
+  (`spawnSync adb EBUSY`, even for `adb version`, even with the sandbox
+  disabled), so `tools/probe-native-back.sh` is bash and uses Node only for CDP.
+  And `App.exitApp()` calls `finishAffinity()` — the activity closes but the
+  process stays cached, so a `pidof` check reports a working exit as a failure;
+  assert on the foreground activity instead. The double-tap window is 2s, so the
+  two back presses must not have a CDP round-trip between them.
+  Not verified here: Play Store signing (debug APK only) and the full device
+  matrix — both Phase 7.
+
 ## 10. Implementer handoff prompt (single source)
 
 The copy-pasteable handoff prompt lives in exactly one place:

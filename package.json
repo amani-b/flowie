@@ -10,6 +10,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.3",
     "@supabase/supabase-js": "^2.98.0",
     "framer-motion": "^11.16.1",
     "lucide-react": "^0.294.0",
@@ -20,6 +25,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.2",
     "@gradio/client": "^2.7.0",
     "@tailwindcss/vite": "^4.1.7",
     "@types/react": "^18.2.0",

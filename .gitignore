@@ -69,3 +69,9 @@ htmlcov/
 # Recon harness workdirs (per-garment intermediates, may contain user photos)
 recon-work/
 
+# Capacitor live-reload helper. Machine-specific (LAN IP + dev-server URL) and
+# never part of a build — see docs/ENGINEERING_EXECUTION_SPEC.md Phase 5.
+# Gradle/build outputs under android/ are NOT listed here: Capacitor generates
+# android/.gitignore with the platform and it already covers them.
+scripts/capacitor.live-reload.mjs
+

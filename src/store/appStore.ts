@@ -21,6 +21,7 @@ import type {
 } from "../types";
 import { DEMO_OUTFITS, getDemoWardrobe } from "../lib/mock";
 import { markStage } from "../lib/telemetry";
+import { haptic } from "../lib/native";
 import { enqueue, isActive, subscribe as subscribeJobs } from "../services/jobQueue";
 import {
   lookupRecon,
@@ -327,12 +328,14 @@ export function applyThemeToDom(theme: ThemeMode) {
   if (meta) meta.setAttribute("content", theme === "dark" ? "#0C110D" : "#EDF1EC");
 }
 
+/**
+ * Short UI feedback on state-changing taps. Delegates to the native haptics
+ * layer (`lib/native.ts`), which is a real haptic tick on device and falls back
+ * to the original `navigator.vibrate` in the browser. Fire-and-forget —
+ * haptics are never worth blocking a store mutation on.
+ */
 function buzz(ms = 8) {
-  try {
-    navigator.vibrate?.(ms);
-  } catch {
-    /* no haptics — fine */
-  }
+  void haptic(ms);
 }
 
 let bootStarted = false;

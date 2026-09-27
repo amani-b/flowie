@@ -1,4 +1,4 @@
-import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { MotionConfig, motion } from "framer-motion";
@@ -12,6 +12,8 @@ import JobBanner from "./components/JobBanner";
 import Toast from "./components/Toast";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { markStage } from "./lib/telemetry";
+import { exitApp, onBackButton, syncStatusBar } from "./lib/native";
+import { closeTopOverlay } from "./lib/overlayStack";
 import AuthScreen from "./screens/AuthScreen";
 import AuthCallback from "./screens/AuthCallback";
 import Onboarding from "./screens/Onboarding";
@@ -83,6 +85,57 @@ function VisibilityChangeHandler() {
       supabase?.auth.stopAutoRefresh();
     };
   }, []);
+
+  return null;
+}
+
+/**
+ * Android hardware back button.
+ *
+ * The chain unwinds in the reverse order the user built it up: dismiss the
+ * drawer, then the topmost sheet, then return to Today, and only then offer to
+ * leave. Exiting on the first press from a deep screen is the classic Android
+ * papercut — you lose your place with no warning, and there is no browser
+ * chrome to recover it.
+ *
+ * Registering this listener *disables* Capacitor's own default back handling,
+ * so every case must be covered here. There is no fallback underneath: a case
+ * this function does not handle leaves the back button inert.
+ *
+ * Reads the store with `getState()` rather than subscribing — this is an event
+ * handler, not render output, and subscribing would re-render the whole app
+ * shell on every drawer open and tab change for no reason.
+ */
+function NativeBackHandler() {
+  const lastBackAt = useRef(0);
+
+  useEffect(
+    () =>
+      onBackButton(() => {
+        const s = useAppStore.getState();
+
+        if (s.drawerOpen) {
+          s.setDrawer(false);
+          return;
+        }
+        if (closeTopOverlay()) return;
+        if (s.tab !== "home") {
+          useAppStore.setState({ tab: "home" });
+          return;
+        }
+
+        // Already on Today with nothing open: this is the only state the app
+        // can be left from, so make it deliberate rather than instant.
+        const now = Date.now();
+        if (now - lastBackAt.current < 2000) {
+          void exitApp();
+          return;
+        }
+        lastBackAt.current = now;
+        s.notify("Press back again to exit");
+      }),
+    []
+  );
 
   return null;
 }
@@ -299,8 +352,12 @@ function AppContent() {
   const onboarded = useIsOnboarded();
 
   // Keep the DOM class in sync with the persisted theme on boot & change.
+  // The native status bar follows the same theme: on Android it is always
+  // overlaid on the web layer (enforced from Android 15), so a bar left on the
+  // wrong style would show dark icons over the app's dark background.
   useEffect(() => {
     applyThemeToDom(theme);
+    void syncStatusBar(theme);
   }, [theme]);
 
   return (
@@ -366,6 +423,8 @@ export default function App() {
         <VisibilityChangeHandler />
         {/* InstallPromptHandler captures PWA install prompt event */}
         <InstallPromptHandler />
+        {/* NativeBackHandler owns the Android hardware back button */}
+        <NativeBackHandler />
         <Routes>
           <Route path="/" element={<AppContent />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
