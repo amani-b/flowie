@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import type { ReactElement } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
-import { AnimatePresence, motion } from "framer-motion";
+import { MotionConfig, motion } from "framer-motion";
 import { applyThemeToDom, useAppStore } from "./store/appStore";
 import { useIsOnboarded } from "./store/selectors";
 import Ambient from "./components/Ambient";
@@ -96,6 +97,8 @@ const SCREENS = {
 
 type TabId = keyof typeof SCREENS;
 
+const ALL_TABS = Object.keys(SCREENS) as TabId[];
+
 const TAB_LABELS: Record<TabId, string> = {
   home: "Today",
   closet: "Closet",
@@ -108,26 +111,38 @@ const TAB_LABELS: Record<TabId, string> = {
  * In-tab recovery screen. The point is that the shell survives: the wearer
  * can still switch tabs and reach the drawer, so a single broken screen is
  * a dead end for that tab only — never for the app.
+ *
+ * Phase 4 added `Try again`. Before, the only ways out of a latched error were
+ * leaving the tab (which cleared it via a changing `resetKey`) or reloading —
+ * so a screen that threw on every render looked unrecoverable, and a screen
+ * that threw once cost you your tab. Now the boundary is per-tab and stable,
+ * and this button is what clears it.
  */
-function TabErrorFallback({ tab }: { tab: TabId }) {
+function TabErrorFallback({ tab, onRetry }: { tab: TabId; onRetry: () => void }) {
   const other = (Object.keys(TAB_LABELS) as TabId[]).find((t) => t !== tab);
   const goElsewhere = () => {
     if (other) useAppStore.setState({ tab: other });
   };
   return (
     <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 px-6 py-12 text-center">
-      <p className="font-display text-[20px] font-extrabold">
+      <p className="text-[20px] font-extrabold">
         {TAB_LABELS[tab]} didn&rsquo;t load
       </p>
       <p className="max-w-[300px] text-[13px] font-medium leading-relaxed text-mut">
-        Your closet is safe — nothing was lost. Switch tabs and come back, or
+        Your closet is safe — nothing was lost. Try again, switch tabs, or
         reload if it keeps happening.
       </p>
-      <div className="mt-2 flex gap-2">
+      <div className="mt-2 flex flex-wrap justify-center gap-2">
+        <button
+          onClick={onRetry}
+          className="rounded-full bg-acc px-5 py-2.5 text-[13px] font-extrabold text-accink transition active:scale-95"
+        >
+          Try again
+        </button>
         {other && (
           <button
             onClick={goElsewhere}
-            className="rounded-full bg-acc px-5 py-2.5 text-[13px] font-extrabold text-accink transition active:scale-95"
+            className="rounded-full border border-line px-4 py-2.5 text-[13px] font-extrabold text-mut transition active:scale-95"
           >
             Go to {TAB_LABELS[other]}
           </button>
@@ -169,37 +184,103 @@ function Splash() {
 
 function Shell() {
   const tab = useAppStore((s) => s.tab);
-  const Screen = SCREENS[tab];
+
+  /**
+   * Keep-alive (Phase 4). A screen mounts the first time its tab is opened and
+   * then stays mounted, hidden with the `hidden` attribute instead of being
+   * unmounted. Two things this buys:
+   *
+   *  - Tab switching is a display toggle, not a remount. Returning to Closet
+   *    no longer re-mounts a 40-tile grid and re-resolves 40 images.
+   *  - In-screen state survives a tab switch. Previously the Lookbook search
+   *    box, the Closet filters and the Studio selection were all silently
+   *    thrown away by any trip to another tab.
+   *
+   * Lazy, not eager: only visited tabs are mounted, so boot still renders one
+   * screen — mounting all five at boot would re-introduce the O(all screens)
+   * boot cost Phase 3 removed.
+   */
+  const [visited, setVisited] = useState<readonly TabId[]>(["home"]);
+
+  /**
+   * The union is computed during render, not in an effect.
+   *
+   * `tab` changes synchronously; an effect runs after paint. Adding the tab to
+   * `visited` from an effect therefore produces one commit where the outgoing
+   * wrapper is already `hidden` and the incoming one does not exist yet — i.e.
+   * a frame with no screen on it at all, which is precisely the empty-frame gap
+   * Phase 4 removes. Measured before the fix: 4 cold switches, 4 empty frames.
+   * Computing the union in render makes the incoming screen mount in the same
+   * commit that hides the outgoing one.
+   */
+  const rendered = visited.includes(tab) ? visited : [...visited, tab];
+
+  /**
+   * One element per screen, created once. A tab switch re-renders the whole
+   * Shell, and without a stable element identity React would re-render all five
+   * screens on every switch — giving back most of what keep-alive buys. With
+   * the element held steady, React skips the subtrees whose tab did not change.
+   */
+  const screens = useMemo(
+    () =>
+      Object.fromEntries(
+        ALL_TABS.map((t) => [t, createElement(SCREENS[t])])
+      ) as Record<TabId, ReactElement>,
+    []
+  );
+
+  /**
+   * Per-tab retry counter. `ErrorBoundary` clears a latched error when its
+   * `resetKey` changes, so the boundary is keyed `tab:attempt` and this is
+   * what bumps the attempt for the tab the wearer is already looking at.
+   */
+  const [attempts, setAttempts] = useState<Partial<Record<TabId, number>>>({});
+
   useEffect(() => {
-    // Phase 0 timing: tab-switch cost, including the AnimatePresence gap.
+    // Phase 0 timing: tab-switch cost. Now measures a display toggle.
     markStage(`tab:${tab}`);
+    setVisited((v) => (v.includes(tab) ? v : [...v, tab]));
   }, [tab]);
+
+  // A kept-alive tab keeps its DOM but not its scroll offset — the document
+  // is one scroll container shared by all five screens, so without this you
+  // would land wherever the previous tab left the page. Per-tab scroll memory
+  // is deliberately not attempted here; it needs a scroll listener that does
+  // not record the browser's height-clamp as the outgoing tab's position.
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [tab]);
+
+  const retryTab = useCallback((t: TabId) => {
+    setAttempts((a) => ({ ...a, [t]: (a[t] ?? 0) + 1 }));
+  }, []);
+
   return (
     <>
       <TopBar />
       <main className="mx-auto w-full max-w-md">
         <div className="pt-[calc(env(safe-area-inset-top)+76px)]">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={tab}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -12 }}
-              transition={{ duration: 0.22, ease: "easeOut" }}
-            >
-              {/* Per-tab boundary (Phase 0, RC-7): a throw in one screen used
-                  to bubble to the ROOT boundary, so a single bad tab nuked the
-                  whole app — nav, drawer and the other tabs included — and the
-                  only recovery was a reload. Here the damage stops at the
-                  active screen: the shell, bottom nav and drawer stay alive, so
-                  the wearer can switch tabs (resetKey={tab} latches a fresh
-                  mount per tab, clearing the error on return). `mode="wait"` is
-                  kept for now; Phase 4 makes tab switching instant. */}
-              <ErrorBoundary resetKey={tab} fallback={<TabErrorFallback tab={tab} />}>
-                <Screen />
-              </ErrorBoundary>
-            </motion.div>
-          </AnimatePresence>
+          {rendered.map((t) => {
+            const active = t === tab;
+            return (
+              // Per-tab boundary (Phase 0, RC-7): a throw in one screen used to
+              // bubble to the ROOT boundary, so a single bad tab nuked the whole
+              // app — nav, drawer and the other tabs included. Here the damage
+              // stops at the active screen. Phase 4 dropped the
+              // `AnimatePresence mode="wait"` wrapper: `mode="wait"` ran the
+              // outgoing screen's 0.22s exit before mounting the incoming one,
+              // so every tab switch showed an empty frame. There is no exit
+              // animation now, and there is nothing to wait for.
+              <div key={t} data-tab={t} hidden={!active} aria-hidden={!active}>
+                <ErrorBoundary
+                  resetKey={`${t}:${attempts[t] ?? 0}`}
+                  fallback={<TabErrorFallback tab={t} onRetry={() => retryTab(t)} />}
+                >
+                  {screens[t]}
+                </ErrorBoundary>
+              </div>
+            );
+          })}
         </div>
       </main>
       <JobBanner />
@@ -273,18 +354,24 @@ export default function App() {
   }, [boot]);
 
   return (
-    <BrowserRouter>
-      {/* OAuthHashHandler must be outside Routes to run on ALL paths before routing */}
-      <OAuthHashHandler />
-      {/* VisibilityChangeHandler manages Supabase token refresh for backgrounded tabs */}
-      <VisibilityChangeHandler />
-      {/* InstallPromptHandler captures PWA install prompt event */}
-      <InstallPromptHandler />
-      <Routes>
-        <Route path="/" element={<AppContent />} />
-        <Route path="/auth/callback" element={<AuthCallback />} />
-        <Route path="/auth" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+    // `reducedMotion="user"` makes every Framer animation in the app honour the
+    // OS "remove animations" setting — transform/layout animations are skipped,
+    // opacity fades still run. index.css handles the plain CSS side of the same
+    // setting; this covers the JS-driven half.
+    <MotionConfig reducedMotion="user">
+      <BrowserRouter>
+        {/* OAuthHashHandler must be outside Routes to run on ALL paths before routing */}
+        <OAuthHashHandler />
+        {/* VisibilityChangeHandler manages Supabase token refresh for backgrounded tabs */}
+        <VisibilityChangeHandler />
+        {/* InstallPromptHandler captures PWA install prompt event */}
+        <InstallPromptHandler />
+        <Routes>
+          <Route path="/" element={<AppContent />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/auth" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </MotionConfig>
   );
 }

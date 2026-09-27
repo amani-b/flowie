@@ -103,7 +103,7 @@ export default function GarmentPhoto({
         aria-label={`Preparing studio shot for ${garment.name}`}
       >
         <Loader2 className="h-5 w-5 animate-spin text-mut" />
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-mut">
+        <p className="text-[11px] font-extrabold uppercase tracking-[0.16em] text-mut">
           Preparing shot…
         </p>
       </div>
@@ -177,7 +177,7 @@ export default function GarmentPhoto({
         className={cn("h-full w-full object-cover", imgClassName)}
       />
       {reconPending && (
-        <span className="absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] items-center gap-1 rounded-full bg-black/45 px-2 py-1 text-[9px] font-extrabold uppercase tracking-[0.12em] text-white backdrop-blur-sm">
+        <span className="absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] items-center gap-1 rounded-full bg-black/45 px-2 py-1 text-[11px] font-extrabold uppercase tracking-[0.12em] text-white backdrop-blur-sm">
           <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
           {/* The job's own step when we have one — a fixed "Reconstructing…"
               looked identical whether we were uploading or waiting on the
@@ -200,7 +200,7 @@ export default function GarmentPhoto({
             setRetryTick((t) => t + 1);
             retryRecon(garment.id);
           }}
-          className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-[9px] font-extrabold uppercase tracking-[0.12em] text-white backdrop-blur-sm transition active:scale-95"
+          className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-[11px] font-extrabold uppercase tracking-[0.12em] text-white backdrop-blur-sm transition active:scale-95"
           aria-label={`Retry the studio shot for ${garment.name}`}
         >
           <RefreshCw className="h-3 w-3" /> Retry

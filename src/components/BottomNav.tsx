@@ -19,7 +19,9 @@ export default function BottomNav() {
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40">
       <div className="mx-auto w-full max-w-md px-3 pb-[calc(env(safe-area-inset-bottom)+10px)]">
-        <div className="glass flex h-[64px] items-stretch rounded-[22px] px-1.5 shadow-lg">
+        {/* Solid, not `.glass` — same reason as TopBar. The nav is the one
+            element that is always on screen and always repainting. */}
+        <div className="bar flex h-[64px] items-stretch rounded-[22px] px-1.5">
           {TABS.map(({ id, label, icon: Icon }) => {
             const active = tab === id;
             return (
@@ -41,7 +43,7 @@ export default function BottomNav() {
                   />
                 )}
                 <Icon className="relative z-10 h-[20px] w-[20px]" strokeWidth={active ? 2.4 : 2} />
-                <span className="relative z-10 text-[10px] font-extrabold tracking-wide">
+                <span className="relative z-10 text-[11px] font-extrabold tracking-wide">
                   {label}
                 </span>
               </button>

@@ -226,7 +226,7 @@ export default function Onboarding() {
                         >
                           {v.label}
                         </span>
-                        <span className="mt-0.5 block text-[10.5px] font-bold text-mut">
+                        <span className="mt-0.5 block text-[11px] font-bold text-mut">
                           {v.blurb}
                         </span>
                       </button>
@@ -247,7 +247,7 @@ export default function Onboarding() {
                   <div className="card relative overflow-hidden rounded-[26px] p-3">
                     <OutfitBoard outfit={PLACEHOLDER_OUTFIT} animateKey="onboard" />
                   </div>
-                  <span className="absolute -top-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-acc px-2.5 py-1 text-[8.5px] font-extrabold tracking-[0.16em] text-accink">
+                  <span className="absolute -top-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-acc px-2.5 py-1 text-[11px] font-extrabold tracking-[0.16em] text-accink">
                     LIVE PREVIEW
                   </span>
                 </div>
@@ -274,7 +274,7 @@ export default function Onboarding() {
             <ArrowLeft className="h-5 w-5" />
           </motion.button>
         ) : (
-          <span className="w-[52px] shrink-0 text-center text-[9.5px] font-extrabold tracking-[0.14em] text-mut">
+          <span className="w-[52px] shrink-0 text-center text-[11px] font-extrabold tracking-[0.14em] text-mut">
             SWIPE →
           </span>
         )}

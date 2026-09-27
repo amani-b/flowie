@@ -517,6 +517,53 @@ DECISION = locked. PLANNED = specified, not implemented.
   already-ignored `public/_tmp_photos/` (the same discipline Phase 1 used)
   rather than widening the served root.
 
+- PHASE 4 EXECUTED (2026-09-27), branch `impl/phases-0-7`. Full evidence in
+  `docs/PHASE4_GATE_EVIDENCE.md`; raw probe output committed under
+  `docs/phase4/`. Five things this phase learned that the plan did not
+  anticipate, all recorded rather than smoothed over:
+  (1) KEEP-ALIVE HAS TWO TRAPS, AND THE PROBE FOUND BOTH. Adding the tab to the
+  visited set from an effect — the obvious implementation — produces one commit
+  where the outgoing screen is hidden and the incoming one does not exist yet:
+  a literal empty frame, the exact RC-7 symptom Phase 4 exists to remove
+  (measured: 4 cold switches → 4 empty frames). And `<Screen />` created fresh
+  per render meant every tab switch re-rendered all five kept-alive screens,
+  so keep-alive gave back most of what it bought (warm switch 43–55 ms). Both
+  fixed — render-time union, memoised screen elements — and re-measured at
+  `emptyFrames: 0` and 14–23 ms. Neither is visible in a diff or a screenshot.
+  (2) THE LIGHT THEME FAILED AA, THE DARK THEME DID NOT. §5 Phase 4 asked for a
+  "contrast audit" but the audit's real output was 13 of 30 light-theme pairs
+  below 4.5:1: mid-tone accents tuned for a dark background were being used as
+  text on a near-white one. Five light-theme tokens moved (see the evidence doc
+  §2 for the before/after and the minimal-lightness method). The dark palette
+  is untouched. `tools/audit-contrast.mjs` reads the tokens from `index.css`
+  and exits non-zero on failure, so this cannot regress silently.
+  (3) "EACH SCREEN: LOADING SKELETON" IS NOT LITERALLY SATISFIABLE, AND SHOULD
+  NOT BE FORCED. Three of the five screens render from the persisted store
+  synchronously and are only reachable after `boot()` resolves (the app shows
+  `Splash` until then), so a skeleton there would never be seen by anyone.
+  Only Today (weather) and Studio (generation) have a real async phase, and
+  both already had skeletons. The checklist item is satisfied as "a loading
+  state wherever a load exists"; the evidence doc §4 records the audit.
+  (4) THE HANDSET HAS OS-LEVEL ANIMATION REMOVAL ON. The first reduced-motion
+  measurement came back `matches: true` on a run that had *not* asked for it,
+  which would have made the "honours prefers-reduced-motion" claim vacuous. The
+  runner gained `--motion reduce|no-preference` and both states are now
+  measured explicitly: `drift-a`/`drift-b` under `no-preference`,
+  `animation-name: none` under `reduce`.
+  (5) THE PROBE HARNESS WAS ITSELF THE FLAKIEST THING IN THE LOOP. Three
+  separate failure modes, each of which looked like a broken app rather than a
+  broken harness: the device tab had to be opened by hand; the CDP `adb
+  forward` goes silent after a run; and an evaluate issued while `am start`'s
+  navigation is still in flight has its reply dropped, which surfaces as
+  "device link lost". `tools/run-probe.mjs` now opens the tab via `adb`,
+  re-creates both tunnels, waits for a stable document, and prints a reason on
+  every non-zero exit. It also owns one long-lived CDP session, without which
+  `Emulation.*` overrides are silently dropped and reduced motion cannot be
+  emulated at all.
+  Also unchanged by this phase: the `node_modules` churn in `git status`
+  (including a deleted `lightningcss-linux-x64-musl`) is Phase 3's dependency
+  audit, not Phase 4, and remains Phase 6's job.
+
 ## 10. Implementer handoff prompt (single source)
 
 The copy-pasteable handoff prompt lives in exactly one place:
@@ -659,6 +706,55 @@ Re-run when a device is attached and stable:
 `node tools/run-probe.mjs tools/probe-jobs-a.mjs` (then `-b`, `-c`,
 `probe-kill.mjs`). Probe A intercepts egress, so the shared 4/day recon quota
 is not spent.
+
+### Phase 3 — persist + selectors + render cost — **GATE PASSED**
+
+Evidence: `docs/PHASE3_GATE_EVIDENCE.md` (commit `cfc06ca7`, tag
+`phase/3-done`). Headline: persisted snapshot **5 827 724 → 9 285 bytes** at 40
+recon-ready garments (0.09× the 100 KB budget), zero whole-collection garment
+subscriptions left, build warnings **3 → 0**. Closes RC-1, RC-2, RC-6 and
+removes RC-4's boot-time blob merge.
+
+### Phase 4 — UI/UX pass — **GATE PASSED**
+
+Evidence: `docs/PHASE4_GATE_EVIDENCE.md`; raw probe output in
+`docs/phase4/a11y-probe.json` and `docs/phase4/a11y-probe-reduced-motion.json`;
+screenshots `docs/phase4/{dark,light}-{home,closet,studio,looks,calendar}.png`.
+Closes **RC-8** and the remainder of **RC-7**.
+
+Scope as built:
+
+| Piece | File |
+| --- | --- |
+| 44px hit-area rule, focus ring, reduced-motion block, solid `.bar` surface | `src/index.css` |
+| Zoom restored (`maximum-scale` removed), `color-scheme` meta | `index.html` |
+| Instant switch, lazy keep-alive, per-tab **Try again** | `src/App.tsx` |
+| Solid fixed bars | `src/components/TopBar.tsx`, `src/components/BottomNav.tsx` |
+| Calmer Ambient, `data-ambient-glow` freeze hooks | `src/components/Ambient.tsx` |
+| Rendered-DOM audit probe | `tools/probe-a11y.mjs` |
+| Token-driven WCAG audit | `tools/audit-contrast.mjs` |
+| Harness: self-opening device tab, tunnel repair, stable-document gate, one CDP session, `--motion`, `--theme`, `--shots` | `tools/run-probe.mjs` |
+
+Measured on the physical handset (all re-run on this machine):
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` | **0 errors** |
+| `npx vitest run` | **51 passed**, 5 files |
+| `npm run build` | exit 0, 1808 modules, **zero warnings** (baseline held) |
+| `node tools/audit-contrast.mjs` | **0 of 60 pairs** below target |
+| Touch targets below 44×44 | **0** of 83 controls measured |
+| Rendered text below 11px | **0** |
+| Empty frames during tab switching | **0** of 61 sampled |
+| Warm tab switch | 13.8 – 22.9 ms (median ≈ 16 ms), 5 screens kept alive |
+| Syne occurrences | 26 source sites → 13; 6 distinct elements in the rendered DOM |
+
+The phase found two defects in its own implementation (a one-frame empty gap
+and a five-screen re-render per switch) that no diff or screenshot would have
+shown — both are in the evidence doc §3. Its device gate is **closed**: the
+probe ran end to end on the attached handset in both motion modes and both
+themes.
+
 
 
 

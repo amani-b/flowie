@@ -57,7 +57,7 @@ export default class ErrorBoundary extends Component<Props, State> {
     if (this.props.fallback) return this.props.fallback;
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 px-6 py-12 text-center">
-        <p className="font-display text-[20px] font-extrabold">Something didn&rsquo;t load</p>
+        <p className="text-[20px] font-extrabold">Something didn&rsquo;t load</p>
         <p className="max-w-[300px] text-[13px] font-medium leading-relaxed text-mut">
           {this.state.error.message ||
             "An unexpected error hit this screen. Your closet is safe — this is usually a display hiccup."}
@@ -80,7 +80,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           <summary className="cursor-pointer text-[11px] font-bold text-mut">
             Details
           </summary>
-          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-mut">
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-mut">
             {this.state.error.stack ?? String(this.state.error)}
           </pre>
         </details>

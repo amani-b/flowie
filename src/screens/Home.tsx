@@ -118,7 +118,7 @@ export default function Home() {
             {greeting()}, {firstName(user?.name ?? "stylist")}
           </h1>
         </div>
-        <span className="mb-1 flex items-center gap-1.5 rounded-full border border-line bg-card px-2.5 py-1 text-[10px] font-extrabold tracking-[0.12em] text-mut">
+        <span className="mb-1 flex items-center gap-1.5 rounded-full border border-line bg-card px-2.5 py-1 text-[11px] font-extrabold tracking-[0.12em] text-mut">
           <Sparkles className="h-3 w-3 text-acc" />
           {geminiReady ? "SMART" : "OFFLINE"}
         </span>
@@ -172,12 +172,12 @@ export default function Home() {
                 </button>
                 <div className="flex items-center gap-1.5">
                   {wx.source === "live" ? (
-                    <span className="flex items-center gap-1.5 rounded-full bg-accsoft px-2.5 py-1 text-[9.5px] font-extrabold tracking-[0.14em] text-acc">
+                    <span className="flex items-center gap-1.5 rounded-full bg-accsoft px-2.5 py-1 text-[11px] font-extrabold tracking-[0.14em] text-acc">
                       <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-acc" />
                       LIVE
                     </span>
                   ) : (
-                    <span className="rounded-full bg-ambersoft px-2.5 py-1 text-[9.5px] font-extrabold tracking-[0.14em] text-amber">
+                    <span className="rounded-full bg-ambersoft px-2.5 py-1 text-[11px] font-extrabold tracking-[0.14em] text-amber">
                       OFFLINE
                     </span>
                   )}
@@ -305,7 +305,7 @@ export default function Home() {
                 {todayPieces.map((g) => (
                   <span
                     key={g.id}
-                    className="flex items-center gap-1.5 rounded-full border border-line px-2 py-1 text-[10.5px] font-extrabold"
+                    className="flex items-center gap-1.5 rounded-full border border-line px-2 py-1 text-[11px] font-extrabold"
                   >
                     <span
                       className="h-2.5 w-2.5 rounded-full border border-linestrong"
@@ -384,7 +384,7 @@ export default function Home() {
               >
                 <OutfitBoard outfit={look.outfit} compact staticBoard />
                 <p className="mt-1 truncate px-0.5 text-[11px] font-extrabold">{look.name}</p>
-                <p className="px-0.5 text-[9.5px] font-bold text-mut">{timeAgo(look.createdAt)}</p>
+                <p className="px-0.5 text-[11px] font-bold text-mut">{timeAgo(look.createdAt)}</p>
               </button>
             ))}
           </div>

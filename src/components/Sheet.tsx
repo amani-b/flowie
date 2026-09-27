@@ -58,7 +58,7 @@ export default function Sheet({
               <span className="h-1.5 w-11 rounded-full bg-linestrong" />
             </div>
             <div className="flex items-center justify-between px-5 pt-3">
-              <h2 className="font-display text-[18px] font-extrabold tracking-tight">
+              <h2 className="text-[18px] font-extrabold tracking-tight">
                 {title}
               </h2>
               <button

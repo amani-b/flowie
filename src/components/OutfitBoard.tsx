@@ -80,7 +80,7 @@ export default function OutfitBoard({
   return (
     <div className={cn("select-none", className)} key={animateKey ?? "board"}>
       <div className="mb-2 flex items-center justify-between px-0.5">
-        <span className="text-[9.5px] font-extrabold uppercase tracking-[0.18em] text-mut">
+        <span className="text-[11px] font-extrabold uppercase tracking-[0.18em] text-mut">
           {combined ? "Flat-lay" : `${pieces.length} piece${pieces.length > 1 ? "s" : ""}`}
         </span>
         {interactive && (
@@ -88,7 +88,7 @@ export default function OutfitBoard({
             onClick={toggle}
             aria-pressed={combined}
             aria-label={combined ? "Show pieces separately" : "Combine into one outfit"}
-            className="flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-[10px] font-extrabold text-mut transition hover:text-ink active:scale-95"
+            className="flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-[11px] font-extrabold text-mut transition hover:text-ink active:scale-95"
           >
             {combined ? <Split className="h-3 w-3" /> : <Combine className="h-3 w-3" />}
             {combined ? "Separate" : "Combine"}
@@ -209,7 +209,7 @@ export default function OutfitBoard({
                 <GarmentPhoto garment={g} eager={eager} />
               </div>
               {!compact && (
-                <p className="truncate bg-card px-2 py-1.5 text-center text-[10px] font-extrabold">
+                <p className="truncate bg-card px-2 py-1.5 text-center text-[11px] font-extrabold">
                   {g.name}
                 </p>
               )}

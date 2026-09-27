@@ -185,7 +185,7 @@ export default function Studio() {
           <span className="flex h-14 w-14 items-center justify-center rounded-full bg-accsoft text-acc">
             <Wand2 className="h-7 w-7" />
           </span>
-          <h2 className="mt-4 font-display text-[20px] font-extrabold">Nothing to style</h2>
+          <h2 className="mt-4 text-[20px] font-extrabold">Nothing to style</h2>
           <p className="mt-1.5 max-w-[270px] text-[13px] font-medium leading-relaxed text-mut">
             The studio needs pieces to work with. Fill the closet first — the
             sample wardrobe gets you there in one tap.
@@ -219,9 +219,14 @@ export default function Studio() {
       </header>
 
       {/* mode selector */}
-      <div className="-mx-4 mt-4 flex gap-1.5 overflow-x-auto px-4 pb-1">
+      <div
+        role="group"
+        aria-label="Styling mode"
+        className="-mx-4 mt-4 flex gap-1.5 overflow-x-auto px-4 pb-1"
+      >
         <button
           onClick={() => setMode("ai")}
+          aria-pressed={mode === "ai"}
           className={cn(
             "shrink-0 rounded-full border px-4 py-2 text-[12px] font-extrabold transition-all active:scale-95",
             mode === "ai"
@@ -233,6 +238,7 @@ export default function Studio() {
         </button>
         <button
           onClick={() => setMode("manual")}
+          aria-pressed={mode === "manual"}
           className={cn(
             "shrink-0 rounded-full border px-4 py-2 text-[12px] font-extrabold transition-all active:scale-95",
             mode === "manual"
@@ -255,6 +261,7 @@ export default function Studio() {
                   setOccasion(o);
                   void generateForStudio(o);
                 }}
+                aria-pressed={occasion === o}
                 disabled={generation.status === "working"}
                 className={cn(
                   "shrink-0 rounded-full border px-4 py-2 text-[12px] font-extrabold transition-all active:scale-95 disabled:opacity-60",
@@ -456,7 +463,7 @@ export default function Studio() {
                 {pieces.map((g) => (
                   <span
                     key={g.id}
-                    className="flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-[10.5px] font-extrabold"
+                    className="flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-[11px] font-extrabold"
                   >
                     <span
                       className="h-2.5 w-2.5 rounded-full border border-linestrong"
@@ -538,7 +545,7 @@ export default function Studio() {
                 {zoomPieces.map((g) => (
                   <span
                     key={g.id}
-                    className="flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-[10.5px] font-extrabold"
+                    className="flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-[11px] font-extrabold"
                   >
                     <span
                       className="h-2.5 w-2.5 rounded-full border border-linestrong"
@@ -582,7 +589,7 @@ export default function Studio() {
                 </div>
                 <div className="px-3 py-2.5">
                   <p className="truncate text-[12.5px] font-extrabold">{g.name}</p>
-                  <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-mut">
+                  <p className="mt-0.5 text-[11px] font-bold uppercase tracking-[0.14em] text-mut">
                     {g.category === "accessory" ? g.kind ?? "extra" : g.category} · {g.colorFamily}
                   </p>
                 </div>

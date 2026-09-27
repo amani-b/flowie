@@ -52,7 +52,7 @@ function GarmentCard({
       </div>
       <div className="px-3 py-2.5">
         <p className="truncate text-[12.5px] font-extrabold">{garment.name}</p>
-        <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-mut">
+        <p className="mt-0.5 text-[11px] font-bold uppercase tracking-[0.14em] text-mut">
           {garment.category === "accessory" ? garment.kind ?? "extra" : garment.category}
           {" · "}
           {garment.colorFamily}

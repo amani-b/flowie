@@ -145,7 +145,7 @@ export default function Drawer() {
 
               {/* account */}
               <div className="card flex items-center gap-3 rounded-[20px] p-4">
-                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-acc font-display text-[15px] font-extrabold text-accink">
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-acc text-[15px] font-extrabold text-accink">
                   {initials}
                 </div>
                 <div className="min-w-0">
@@ -156,7 +156,7 @@ export default function Drawer() {
                 </div>
                 <span
                   className={cn(
-                    "ml-auto shrink-0 rounded-full px-2 py-1 text-[9px] font-extrabold tracking-[0.14em]",
+                    "ml-auto shrink-0 rounded-full px-2 py-1 text-[11px] font-extrabold tracking-[0.14em]",
                     user?.isDemo
                       ? "bg-ambersoft text-amber"
                       : mode === "live"
@@ -273,7 +273,7 @@ export default function Drawer() {
                     {confirmErase ? "Tap again to confirm erase" : "Erase local closet & looks"}
                   </button>
                 </div>
-                <p className="px-1 text-[10px] font-bold leading-relaxed text-mut">
+                <p className="px-1 text-[11px] font-bold leading-relaxed text-mut">
                   Flowie v0.2
                   {user?.isDemo ? " · Demo" : mode === "live" ? " · Synced" : " · On this device"}
                 </p>

@@ -11,7 +11,10 @@ export default function TopBar() {
   return (
     <header className="fixed inset-x-0 top-0 z-40">
       <div className="mx-auto w-full max-w-md px-3 pt-[calc(env(safe-area-inset-top)+10px)]">
-        <div className="glass flex h-[54px] items-center justify-between rounded-[20px] px-3.5 shadow-sm">
+        {/* Solid, not `.glass`: this bar is on screen permanently, and a
+            full-width backdrop-filter behind it re-blurs every frame the
+            Ambient background animates. See `index.css` `.bar`. */}
+        <div className="bar flex h-[54px] items-center justify-between rounded-[20px] px-3.5">
           <div className="flex items-center gap-2">
             <LogoMark className="h-[22px] w-[22px] text-ink" />
             <span className="font-display text-[17px] font-extrabold tracking-tight">

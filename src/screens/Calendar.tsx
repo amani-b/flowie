@@ -127,7 +127,7 @@ function ScheduleSheet({
                 >
                   <OutfitBoard outfit={look.outfit} compact staticBoard />
                   <p className="mt-1 truncate text-[11px] font-extrabold">{look.name}</p>
-                  <p className="text-[9px] font-bold text-mut">
+                  <p className="text-[11px] font-bold text-mut">
                     {OCCASION_META[look.occasion].label}
                   </p>
                 </button>
@@ -264,13 +264,18 @@ export default function CalendarView() {
       </header>
 
       {/* View mode toggle */}
-      <div className="mt-4 flex rounded-[14px] border border-line bg-bgdeep p-1">
+      <div
+        role="group"
+        aria-label="Calendar view"
+        className="mt-4 flex rounded-[14px] border border-line bg-bgdeep p-1"
+      >
         {(["week", "month", "history"] as CalendarViewMode[]).map((mode) => {
           const active = viewMode === mode;
           return (
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
+              aria-pressed={active}
               className={cn(
                 "flex flex-1 items-center justify-center rounded-[10px] px-3 py-2 text-[12.5px] font-extrabold transition-all",
                 active ? "bg-card text-ink shadow-sm" : "text-mut hover:text-ink"
@@ -329,7 +334,7 @@ export default function CalendarView() {
                 >
                   <span
                     className={cn(
-                      "text-[9px] font-extrabold",
+                      "text-[11px] font-extrabold",
                       isToday ? "text-acc" : "text-mut"
                     )}
                   >
@@ -386,7 +391,7 @@ export default function CalendarView() {
           {/* Month grid header */}
           <div className="mt-4 grid grid-cols-7 gap-1">
             {DAY_NAMES.map((name) => (
-              <div key={name} className="text-center text-[9px] font-extrabold text-mut">
+              <div key={name} className="text-center text-[11px] font-extrabold text-mut">
                 {name}
               </div>
             ))}
@@ -415,7 +420,7 @@ export default function CalendarView() {
                 >
                   <span
                     className={cn(
-                      "text-[10px] font-extrabold",
+                      "text-[11px] font-extrabold",
                       isToday ? "text-acc" : isInMonth ? "text-ink" : "text-mut"
                     )}
                   >
@@ -455,7 +460,7 @@ export default function CalendarView() {
                       className="card flex items-center gap-3 rounded-[16px] p-2.5"
                     >
                       <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-[10px] bg-accsoft">
-                        <span className="text-[9px] font-extrabold text-acc">
+                        <span className="text-[11px] font-extrabold text-acc">
                           {DAY_NAMES[date.getDay() === 0 ? 6 : date.getDay() - 1]}
                         </span>
                         <span className="text-[13px] font-extrabold text-acc">
@@ -464,7 +469,7 @@ export default function CalendarView() {
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[12.5px] font-extrabold">{look.name}</p>
-                        <p className="text-[10px] font-bold text-mut">
+                        <p className="text-[11px] font-bold text-mut">
                           {OCCASION_META[look.occasion].label}
                         </p>
                       </div>
@@ -486,7 +491,7 @@ export default function CalendarView() {
           <div className="mb-2.5 flex items-center justify-between px-1">
             <p className="label-micro">This week's lineup</p>
             {hasAnySchedules && (
-              <span className="text-[10px] font-extrabold text-mut">
+              <span className="text-[11px] font-extrabold text-mut">
                 {weekDates.filter((d) => bookedDays.has(formatDateKey(d))).length} / 7 days planned
               </span>
             )}
@@ -520,7 +525,7 @@ export default function CalendarView() {
                     className="card flex items-center gap-3 rounded-[16px] p-2.5"
                   >
                     <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-[10px] bg-accsoft">
-                      <span className="text-[9px] font-extrabold text-acc">
+                      <span className="text-[11px] font-extrabold text-acc">
                         {DAY_NAMES[d.getDay() === 0 ? 6 : d.getDay() - 1]}
                       </span>
                       <span className="text-[13px] font-extrabold text-acc">
@@ -529,7 +534,7 @@ export default function CalendarView() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[12.5px] font-extrabold">{look.name}</p>
-                      <p className="text-[10px] font-bold text-mut">
+                      <p className="text-[11px] font-bold text-mut">
                         {OCCASION_META[look.occasion].label}
                       </p>
                     </div>

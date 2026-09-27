@@ -49,10 +49,10 @@ function LookSheet({ look, onClose }: { look: SavedLook | null; onClose: () => v
         <div className="space-y-4">
           <div className="card rounded-[22px] px-4 pt-3">
             <div className="flex items-center justify-between">
-              <span className="rounded-full bg-accsoft px-2.5 py-1 text-[9.5px] font-extrabold tracking-[0.14em] text-acc">
+              <span className="rounded-full bg-accsoft px-2.5 py-1 text-[11px] font-extrabold tracking-[0.14em] text-acc">
                 {OCCASION_META[look.occasion].label.toUpperCase()}
               </span>
-              <span className="flex items-center gap-1 text-[10px] font-extrabold tracking-[0.12em] text-mut">
+              <span className="flex items-center gap-1 text-[11px] font-extrabold tracking-[0.12em] text-mut">
                 {look.engine === "manual" && (
                   <>
                     <Wand2 className="h-3 w-3 text-rose" /> STYLED BY YOU ·
@@ -91,7 +91,7 @@ function LookSheet({ look, onClose }: { look: SavedLook | null; onClose: () => v
           </div>
 
           {look.weatherTags && look.weatherTags.length > 0 && (
-            <p className="px-1 text-[10.5px] font-bold text-mut">
+            <p className="px-1 text-[11px] font-bold text-mut">
               Weather tags: {look.weatherTags.join(" · ")}
             </p>
           )}
@@ -230,7 +230,7 @@ export default function Looks() {
             className="card mt-6 flex flex-col items-center rounded-[24px] px-6 py-12 text-center"
           >
             <LogoMark className="h-14 w-14 text-mut" />
-            <h2 className="mt-4 font-display text-[20px] font-extrabold">No looks pinned yet</h2>
+            <h2 className="mt-4 text-[20px] font-extrabold">No looks pinned yet</h2>
             <p className="mt-1.5 max-w-[260px] text-[13px] font-medium leading-relaxed text-mut">
               When the studio nails an outfit, save it here to build your personal
               rotation.
@@ -249,7 +249,7 @@ export default function Looks() {
             className="card mt-6 flex flex-col items-center rounded-[24px] px-6 py-12 text-center"
           >
             <Search className="mb-2 h-10 w-10 text-mut opacity-50" />
-            <h2 className="mt-2 font-display text-[18px] font-extrabold">No matches found</h2>
+            <h2 className="mt-2 text-[18px] font-extrabold">No matches found</h2>
             <p className="mt-1.5 max-w-[260px] text-[13px] font-medium leading-relaxed text-mut">
               Try a different search term or clear the filter.
             </p>
@@ -279,10 +279,10 @@ export default function Looks() {
                 <OutfitBoard outfit={look.outfit} compact staticBoard />
                 <p className="mt-1.5 truncate text-[13px] font-extrabold">{look.name}</p>
                 <div className="mt-1 flex items-center gap-1.5">
-                  <span className="rounded-full bg-accsoft px-2 py-0.5 text-[9px] font-extrabold tracking-[0.12em] text-acc">
+                  <span className="rounded-full bg-accsoft px-2 py-0.5 text-[11px] font-extrabold tracking-[0.12em] text-acc">
                     {OCCASION_META[look.occasion].label.toUpperCase()}
                   </span>
-                  <span className="text-[9.5px] font-bold text-mut">
+                  <span className="text-[11px] font-bold text-mut">
                     {timeAgo(look.createdAt)}
                   </span>
                 </div>

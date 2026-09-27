@@ -102,7 +102,7 @@ export default function AuthScreen() {
         <div className="flex items-center gap-2">
           <span
             className={cn(
-              "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[9.5px] font-extrabold tracking-[0.16em]",
+              "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-extrabold tracking-[0.16em]",
               isMock
                 ? "border-line bg-card text-amber"
                 : "border-line bg-card text-acc"
@@ -148,7 +148,7 @@ export default function AuthScreen() {
             <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-accsoft text-acc">
               <Inbox className="h-6 w-6" />
             </span>
-            <p className="mt-3 font-display text-[18px] font-extrabold">Check your inbox</p>
+            <p className="mt-3 text-[18px] font-extrabold">Check your inbox</p>
             <p className="mt-1 text-[12.5px] font-medium leading-relaxed text-mut">
               We sent a confirmation link to <span className="font-extrabold text-ink">{email.trim()}</span>.
               Confirm it, then log in.
@@ -286,7 +286,7 @@ export default function AuthScreen() {
 
             <div className="my-4 flex items-center gap-3">
               <span className="h-px flex-1 bg-line" />
-              <span className="text-[10px] font-extrabold tracking-[0.2em] text-mut">OR</span>
+              <span className="text-[11px] font-extrabold tracking-[0.2em] text-mut">OR</span>
               <span className="h-px flex-1 bg-line" />
             </div>
 
@@ -325,7 +325,7 @@ export default function AuthScreen() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.35 }}
-        className="mt-3 text-center text-[10px] font-bold leading-relaxed text-mut"
+        className="mt-3 text-center text-[11px] font-bold leading-relaxed text-mut"
       >
         {isMock
           ? "Demo accounts live on this device only."

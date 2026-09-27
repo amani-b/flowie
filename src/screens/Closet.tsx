@@ -251,7 +251,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-display text-[16px] font-extrabold">Review & Confirm</h3>
+          <h3 className="text-[16px] font-extrabold">Review &amp; Confirm</h3>
           <span className="text-[11px] font-bold text-mut">{pending.length} item(s)</span>
         </div>
 
@@ -264,7 +264,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                     <img src={p.imageDataUrl} alt={p.name} className="h-full w-full object-cover" />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center px-1 text-center">
-                      <span className="line-clamp-2 text-[10px] font-extrabold text-mut">{p.name}</span>
+                      <span className="line-clamp-2 text-[11px] font-extrabold text-mut">{p.name}</span>
                     </div>
                   )}
                 </div>
@@ -317,7 +317,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                   {/* Detected colors + pattern: confirm or correct before saving */}
                   <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] font-bold text-mut">Colors:</span>
+                      <span className="text-[11px] font-bold text-mut">Colors:</span>
                       {(p.colors ?? []).slice(0, 3).map((hex, i) => (
                         <button
                           key={`${hex}-${i}`}
@@ -360,14 +360,14 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                   {/* Warmth + formality: stack vertically on mobile */}
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-bold text-mut">Warmth:</span>
+                      <span className="text-[11px] font-bold text-mut">Warmth:</span>
                       <div className="flex rounded-[8px] border border-line bg-bgdeep p-0.5">
                         {([1, 2, 3] as Warmth[]).map((w) => (
                           <button
                             key={w}
                             onClick={() => updatePending(p.tempId, { warmth: w })}
                             className={cn(
-                              "rounded-[6px] px-1.5 py-0.5 text-[9px] font-extrabold",
+                              "rounded-[6px] px-1.5 py-0.5 text-[11px] font-extrabold",
                               p.warmth === w ? "bg-acc text-accink" : "text-mut"
                             )}
                           >
@@ -378,14 +378,14 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-bold text-mut">Formality:</span>
+                      <span className="text-[11px] font-bold text-mut">Formality:</span>
                       <div className="flex rounded-[8px] border border-line bg-bgdeep p-0.5">
                         {([1, 2, 3] as Formality[]).map((f) => (
                           <button
                             key={f}
                             onClick={() => updatePending(p.tempId, { formality: f })}
                             className={cn(
-                              "rounded-[6px] px-1.5 py-0.5 text-[9px] font-extrabold",
+                              "rounded-[6px] px-1.5 py-0.5 text-[11px] font-extrabold",
                               p.formality === f ? "bg-acc text-accink" : "text-mut"
                             )}
                           >
@@ -443,7 +443,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
               {files.map((f, i) => (
                 <span
                   key={i}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-card px-2.5 py-1 text-[10.5px] font-medium"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-card px-2.5 py-1 text-[11px] font-medium"
                 >
                   {f.name.length > 20 ? f.name.slice(0, 20) + "…" : f.name}
                   <button
@@ -469,7 +469,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
           >
             <Camera className="h-6 w-6" />
             <span>Click to select photos · Single or bulk upload</span>
-            <span className="text-[10.5px] text-mut">Auto-compressed to ~500KB each</span>
+            <span className="text-[11px] text-mut">Auto-compressed to ~500KB each</span>
           </button>
         )}
       </div>
@@ -484,7 +484,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
           />
           <span className="min-w-0 flex-1">
             <span className="block text-[12px] font-extrabold">Review before saving</span>
-            <span className="block text-[10.5px] leading-snug text-mut">
+            <span className="block text-[11px] leading-snug text-mut">
               Off: photos go straight to your closet as they finish. On: check the
               tags first.
             </span>
@@ -496,7 +496,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="label-micro">Analyzing…</span>
-            <span className="text-[10px] font-bold text-mut">{progress}%</span>
+            <span className="text-[11px] font-bold text-mut">{progress}%</span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-bgdeep">
             <motion.div
@@ -640,7 +640,7 @@ function AddForm({ onDone }: { onDone: () => void }) {
               <span className="block text-[11px] font-extrabold">
                 {SHORT_CAT[c.id]}
               </span>
-              <span className="mt-0.5 block text-[9px] font-bold opacity-70">
+              <span className="mt-0.5 block text-[11px] font-bold opacity-70">
                 {c.label}
               </span>
             </button>
@@ -715,7 +715,7 @@ function AddForm({ onDone }: { onDone: () => void }) {
             <img src={photo} alt="Garment preview" className="h-36 w-full object-cover" />
             <button
               onClick={() => setPhoto(null)}
-              className="absolute right-2 top-2 rounded-full bg-black/55 px-2.5 py-1 text-[10.5px] font-extrabold text-white backdrop-blur-sm"
+              className="absolute right-2 top-2 rounded-full bg-black/55 px-2.5 py-1 text-[11px] font-extrabold text-white backdrop-blur-sm"
             >
               Remove
             </button>
@@ -890,7 +890,7 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
               ],
             ].map(([k, v]) => (
               <div key={k} className="rounded-[14px] border border-line px-3.5 py-2.5">
-                <p className="label-micro !text-[9px]">{k}</p>
+                <p className="label-micro !text-[11px]">{k}</p>
                 <p className="mt-0.5 text-[13px] font-extrabold capitalize">{v}</p>
               </div>
             ))}
@@ -1038,7 +1038,7 @@ export default function Closet() {
           className="card mt-6 flex flex-col items-center rounded-[24px] px-6 py-12 text-center"
         >
           <LogoMark className="h-14 w-14 text-mut" />
-          <h2 className="mt-4 font-display text-[20px] font-extrabold">Nothing to wear (yet)</h2>
+          <h2 className="mt-4 text-[20px] font-extrabold">Nothing to wear (yet)</h2>
           <p className="mt-1.5 max-w-[260px] text-[13px] font-medium leading-relaxed text-mut">
             Your closet is empty. Add your first piece, or bring back the sample
             wardrobe to explore.
@@ -1075,6 +1075,7 @@ export default function Closet() {
               <button
                 key={f}
                 onClick={() => setFilter(f)}
+                aria-pressed={filter === f}
                 className={cn(
                   "shrink-0 rounded-full border px-3.5 py-1.5 text-[11.5px] font-extrabold transition-all active:scale-95",
                   filter === f
