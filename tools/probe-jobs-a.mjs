@@ -55,7 +55,9 @@ const persist = (tag) => {
 const evidence = { results: [] };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const until = async (fn, label, ms = 30000) => {
+// Generous, for the same reason as the import budget: tagging can burn 25s
+// inside a single import, so "wait for this job to settle" must outlast it.
+const until = async (fn, label, ms = 180000) => {
   const t = performance.now();
   while (!fn()) {
     if (performance.now() - t > ms) throw new Error("timeout waiting for " + label);
@@ -136,28 +138,69 @@ const loadPhoto = async (n) => {
   return new File([buf], `photo_${n}_2026-09-18_07-49-17.jpg`, { type: "image/jpeg" });
 };
 
-/** Import through the real path and resolve when the batch reports complete. */
+/**
+ * Import through the real path and resolve when the batch reports complete.
+ *
+ * `onItem` hands over a garment WITHOUT an id — the type is
+ * `Omit<Garment, "id" | "createdAt">` because `addGarment` mints the id itself.
+ * So the probe cannot read `g.id` there: doing so yielded `undefined`, the
+ * `find(g => g.id)` lookup found nothing, and the probe reported "no garment"
+ * for a batch that had actually imported one. The id is recovered instead by
+ * diffing the store around the `addGarment` call.
+ *
+ * The completion budget is generous on purpose. Tagging is bounded but slow on
+ * a handset: when Gemini is unreachable the call burns its full `TAG_TIMEOUT_MS`
+ * before the heuristic fallback engages, and the first import of a session also
+ * pays for the worker's first spawn and a cold module graph. A probe timeout
+ * must never be able to out-claim the product.
+ */
+const IMPORT_TIMEOUT_MS = 240000;
+
 const importPhotos = (files, opts = {}) =>
   new Promise((resolve, reject) => {
     const items = files.map((file) => ({ file, fileName: file.name }));
     const got = [];
-    const to = setTimeout(() => reject(new Error("import did not complete")), 60000);
+    // `addGarment` is async, and the store diff that recovers each id resolves
+    // after it. `onComplete` can fire first, so the batch awaits these too —
+    // otherwise the caller reads ids that have not been filled in yet.
+    const idWork = [];
+    const to = setTimeout(
+      () => reject(new Error("import did not complete")),
+      IMPORT_TIMEOUT_MS
+    );
     upload.startImport(items, {
       onItem: (g, _tags, fileName) => {
-        got.push({
-          id: g.id,
+        const entry = {
+          id: null,
           file: fileName,
           sha: (g.photoSha256 || "").slice(0, 16),
           cat: g.category,
           print: !!g.hasPrint,
-        });
-        if (opts.add !== false) void store.getState().addGarment(g, g.photo);
+        };
+        got.push(entry);
+        if (opts.add === false) return;
+        // `addGarment` mints the id, so recover it by diffing the store.
+        const before = new Set(store.getState().garments.map((x) => x.id));
+        idWork.push(
+          store
+            .getState()
+            .addGarment(g, g.photo)
+            .then(() => {
+              const fresh = store.getState().garments.find((x) => !before.has(x.id));
+              if (fresh) entry.id = fresh.id;
+            })
+            .catch(() => {
+              /* left as a null id; the probe reports it */
+            })
+        );
       },
       onError: (f, m) => got.push({ file: f, error: m }),
       onComplete: (added, n) => {
         clearTimeout(to);
-        for (const g of got) if (g.id) S.created.push(g.id);
-        resolve({ got, added, n });
+        Promise.all(idWork).then(() => {
+          for (const g of got) if (g.id) S.created.push(g.id);
+          resolve({ got, added, n });
+        });
       },
     });
   });
@@ -189,7 +232,21 @@ evidence.cacheCleared = true;
 S.phase = "A-cold";
 let mark = S.calls.length;
 const impA = await importPhotos([await loadPhoto(1)]);
+// The import can complete with a per-file ERROR (no decoded item => no `id`).
+// Dereferencing that blindly threw "Cannot read properties of undefined" and
+// masked the real result behind a confusing crash, so surface it as evidence.
 const gA = impA.got.find((g) => g.id);
+if (!gA) {
+  evidence.results.push({
+    test: "A cold import",
+    calls: S.calls.length - mark,
+    imported: false,
+    reported: impA.got.map((g) => g.error ?? g.file),
+    note: "no item was added; the rest of the probe has nothing to compare",
+  });
+  persist("A-no-item");
+  return { ok: false, phase: S.phase, reason: "cold import produced no garment", evidence };
+}
 await until(() => !q.isActive(gA.id), "cold recon to settle");
 evidence.results.push({
   test: "A cold import",
@@ -237,7 +294,7 @@ const midPoll = setInterval(() => {
     midBatch = { activeIds: running, depth: q.queueDepth(), jobs: mirror() };
   }
 }, 20);
-await until(() => cIds.every((id) => !q.isActive(id)), "serial batch to settle", 40000);
+await until(() => cIds.every((id) => !q.isActive(id)), "serial batch to settle", 240000);
 clearInterval(midPoll);
 const cCalls = S.calls.slice(mark);
 evidence.results.push({

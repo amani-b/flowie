@@ -47,8 +47,15 @@ export interface QueueCallbacks {
     tags: TaggingResult,
     fileName: string
   ) => void;
-  /** 0..1 as a fraction, plus raw counts for the label. */
-  onProgress: (done: number, total: number) => void;
+  /**
+   * 0..1 as a fraction, plus raw counts for the label.
+   *
+   * Optional: a caller that only cares about the final result should not be
+   * forced to supply it, and a missing callback must not be able to abort the
+   * import (see `safeCall`). It was required, and omitting it silently stranded
+   * the import — measured on device.
+   */
+  onProgress?: (done: number, total: number) => void;
   /** One file failed; the rest of the import continues. */
   onError: (fileName: string, message: string) => void;
   /** All lanes drained. `added` counts successes. */
@@ -58,6 +65,35 @@ export interface QueueCallbacks {
 export interface ImportHandle {
   /** Idempotent. Aborts in-flight network work and stops pulling files. */
   cancel: () => void;
+}
+
+/**
+ * Invoke a consumer callback without letting it break the import.
+ *
+ * Every callback below is app-supplied, and a throw from one used to escape
+ * the lane: `finishOne()` is called from inside the lane's `try`, so a throwing
+ * `onProgress` was caught by the per-file handler, which then called `onError`
+ * and `finishOne()` again — throwing a second time from the handler, this time
+ * out of `runLane`. That rejected the lane, and the `Promise.all` catch reported
+ * it via `onError` WITHOUT ever calling `onComplete`, so the caller's "import
+ * finished" signal never arrived and the sheet's spinner could not be cleared.
+ * Measured on device: garments were added successfully while the import
+ * reported as never completing.
+ *
+ * A consumer's reporting bug must not be able to lose an already-imported
+ * garment, and must never strand the caller without `onComplete`. The error is
+ * still surfaced (logged + attributed to the file) rather than swallowed.
+ */
+function safeCall<T extends (...args: never[]) => unknown>(
+  fn: T | undefined,
+  ...args: Parameters<T>
+): void {
+  if (!fn) return;
+  try {
+    fn(...args);
+  } catch (e) {
+    console.warn("[uploadQueue] callback threw; import continues:", e);
+  }
 }
 
 export class ImportCancelled extends Error {
@@ -104,7 +140,7 @@ export function startImport(items: QueueItem[], cb: QueueCallbacks): ImportHandl
 
   const finishOne = () => {
     done++;
-    cb.onProgress(done, total);
+    safeCall(cb.onProgress, done, total);
   };
 
   const runLane = async (): Promise<void> => {
@@ -150,11 +186,7 @@ export function startImport(items: QueueItem[], cb: QueueCallbacks): ImportHandl
         // Optimistic: the item lands now, tags and all, rather than waiting
         // for the whole batch to finish. The prepared hash rides along as the
         // recon cache identity (Phase 2) — no extra work, it is already here.
-        cb.onItem(
-          taggingToGarment(tags, dataUrl, prepared.sha256),
-          tags,
-          item.fileName
-        );
+        safeCall(cb.onItem, taggingToGarment(tags, dataUrl, prepared.sha256), tags, item.fileName);
         added++;
         finishOne();
       } catch (e) {
@@ -163,7 +195,8 @@ export function startImport(items: QueueItem[], cb: QueueCallbacks): ImportHandl
           // don't count it as progress.
           return;
         }
-        cb.onError(
+        safeCall(
+          cb.onError,
           item.fileName,
           e instanceof Error ? e.message : "Could not analyze that photo"
         );
@@ -175,16 +208,19 @@ export function startImport(items: QueueItem[], cb: QueueCallbacks): ImportHandl
   void Promise.all(
     Array.from({ length: Math.min(LANES, Math.max(1, total)) }, runLane)
   )
+    .catch((e: unknown) => {
+      // Last-resort net. `runLane` is written not to throw, but a bug must
+      // never leave the caller without its "finished" signal — that is what
+      // strands a spinner. Report the failure, then fall through to onComplete.
+      markStage("import:failed", e instanceof Error ? e.message : "unknown");
+      safeCall(cb.onError, "import", e instanceof Error ? e.message : "Import failed");
+    })
     .then(() => {
       markStage("import:drained", `added=${added}/${total}`);
       if (signal.aborted) return;
-      cb.onComplete(added, total);
-    })
-    .catch((e: unknown) => {
-      // runLane is written not to throw; this is a last-resort net so a bug
-      // can never leave the caller with a permanently open spinner.
-      markStage("import:failed", e instanceof Error ? e.message : "unknown");
-      cb.onError("import", e instanceof Error ? e.message : "Import failed");
+      // Always last, and always: `onComplete` is the only thing that lets the
+      // caller clear its progress UI, so it must fire on both paths.
+      safeCall(cb.onComplete, added, total);
     });
 
   return {
