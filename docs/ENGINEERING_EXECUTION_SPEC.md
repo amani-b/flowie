@@ -379,6 +379,22 @@ DECISION = locked. PLANNED = specified, not implemented.
 reference directories were deliberately KEPT tracked (`240dbe64`). Decision
 recorded in §9; nothing left open here.
 
+**Local scratch — ignored, not deleted.** The Phase 6 review noted that the
+tree-stays-clean assertion in `ci.yml` could not be *verified* on this machine
+while untracked scratch sat at the repo root, because the assertion counts
+every `git status --porcelain` line, `??` included. Untracked files never
+reach the runner, so the gate itself was never at risk — but a check that can
+only be exercised after the push is a check nobody has exercised. The seven
+root-level strays (`t.txt`, `probe-a.json`, `run-probe.cmd`, `run-vite.cmd`,
+`phase2-00-app.png`, `phase2-live.png`, `.workbuddy-ai/`) are now listed in
+`.gitignore` and left on disk: several are evidence, and the two `.cmd`
+launchers are still useful. With them ignored, `npm run build` leaves
+`git status --porcelain` genuinely empty here, which is what makes the
+assertion meaningful *before* the push rather than after it.
+`probe-gate.json` is deliberately NOT listed — it is committed evidence
+produced by `tools/probe-gate.mjs` (driven by `run-probe.cmd`), and an ignore
+rule would not apply to a tracked path anyway.
+
 **Tests — done.** `npm test` is `vitest run` (it already existed; this phase
 did not add it). 8 files, **79 tests, all green**:
 
@@ -777,6 +793,45 @@ correctly blocked behind the push above, not skipped.
   v8 → dropped, v13 → passed through) so the mechanism is documented rather
   than assumed.
 
+- PHASE 6 REVIEW + THE LOCAL-SCRATCH DECISION (2026-09-28). An independent
+  review of `a33828bf` confirmed all three Phase 5 carry-forwards closed and
+  granted Phase 6 **code-done**, but withheld `phase/6-done` — correctly, and
+  §5 Phase 6 had already said so. Two pre-push notes came with it; one was
+  fixable here and is fixed.
+
+  (1) UNTRACKED SCRATCH MADE THE CLEAN-TREE ASSERTION UNVERIFIABLE. `ci.yml`
+  asserts that the build leaves the tree clean, and it counts every
+  `git status --porcelain` line, `??` included. Seven untracked strays sat at
+  the repo root, so that assertion could only ever have been exercised for the
+  first time on the runner. Untracked files do not push, so the gate was never
+  actually at risk — but "unverifiable until after the push" is a bad place for
+  a guard to live, because a guard nobody has run is indistinguishable from a
+  guard that does not work. Fixed by listing the strays in `.gitignore` and
+  leaving them on disk rather than deleting them: `phase2-*.png` are phase 2
+  evidence and `run-{probe,vite}.cmd` are still-useful launchers. Verified
+  rather than assumed — `npm run build` (exit 0, zero warnings) now leaves
+  `git status --porcelain` empty on this machine.
+
+  Worth recording as a near-miss in the same family as the `node_modules`
+  entry above: `probe-gate.json` IS tracked (it is the evidence
+  `tools/probe-gate.mjs` writes) while its sibling `probe-a.json` was not, and
+  the `.cmd` launchers that regenerate them hard-code an absolute Windows path.
+  A glob like `probe-*.json` would have been the tidy-looking choice and the
+  wrong one — it would not untrack the tracked file, and it would have hidden
+  the asymmetry instead of documenting it.
+
+  (2) CI IS PARSE-CHECKED ONLY, AND THAT IS STILL TRUE. Both workflows parse
+  under a YAML loader and every `run` assertion was executed locally — including
+  two negative cases proving the permission check fails on an injected `CAMERA`
+  and on a missing `INTERNET` — but no runner has executed them, because
+  `impl/phases-0-7` has no upstream. That is the one open Phase 6 gate item, and
+  it cannot be closed from this machine without authorisation to push. Phase 7
+  must not start before it.
+
+  Also re-confirmed at this review, unchanged: `node_modules` tracked = 0,
+  `dist/` tracked = 0, 261 tracked files, `tsc --noEmit` 0 errors, 8 test files
+  / 79 tests green.
+
 ## 10. Implementer handoff prompt (single source)
 
 The copy-pasteable handoff prompt lives in exactly one place:
@@ -1003,6 +1058,41 @@ What the review changed in the record, rather than in the code:
 
 Not verified at this gate, and correctly deferred to Phase 7: Play Store
 signing (debug APK only) and the full device matrix (§8 rows 1–18).
+
+### Phase 6 — Hygiene, tests, CI — **CODE-DONE; GATE OPEN**
+
+Evidence: `.github/workflows/{ci,android}.yml`, the three new test files, and
+`docs/phase5/merged-permissions.txt` (added during the Phase 5 sign-off).
+
+Independent review of `a33828bf` granted **code-done** and withheld
+`phase/6-done` — which is exactly what §5 Phase 6 already claimed, so nothing
+in the code needed changing. The gate is "CI green from a clean checkout" and no
+runner has run either workflow: the branch has no upstream. Headline numbers:
+
+| Check | Result |
+| --- | --- |
+| `npx tsc --noEmit` | **0 errors** |
+| `npx vitest run` | **79 passed**, 8 files (was 51 / 5) |
+| `npm run build` | exit 0, **zero warnings** (Phase 4 baseline held) |
+| `git ls-files \| grep -c '^node_modules/'` | **0** |
+| `git ls-files \| grep -c '^dist/'` | **0** |
+| Tracked files | 261 |
+| `git status --porcelain` after a build | **empty** — the root scratch is gitignored now |
+| Workflow YAML | parses under a YAML loader (both files) |
+| `android.yml` assertions | executed locally against the real APK; negative cases fail correctly |
+
+Closed here, verified rather than accepted: all three Phase 5 carry-forwards
+(§9), and the review's untracked-scratch note — the tree-stays-clean assertion
+is now exercisable on this machine, not only on the runner.
+
+Still open, and none of it skippable:
+
+- **The push.** `impl/phases-0-7` has no upstream, so the runners have never
+  run. Until they do, "CI green from a clean checkout" is unproven, and this
+  phase is not done.
+- **Retired Supabase edge functions** — still not deleted from the dashboard.
+  Needs credentials and a live project; the repo copy stays until CI is green.
+- **Phase 7** must not start before the push (device matrix §8, `docs/ANDROID.md`).
 
 
 
