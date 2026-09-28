@@ -64,13 +64,24 @@ jobs:
 
       # JDK 21 — matches the local Adoptium 21.0.11.10. `cache: gradle` reuses
       # the wrapper distribution and dependency cache across runs.
-      - uses: actions/setup-java@v4
+      #
+      # v5, not v4: v4 is a Node 20 action, and GitHub no longer ships Node 20,
+      # so it is force-run on Node 24 — and GitHub has announced v4 will receive
+      # no further updates. It still worked on the first run, which is exactly
+      # why it is worth bumping now rather than after it stops working.
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
 
-      - uses: android-actions/setup-android@v3
+      # v4, not v3 — and this one is not cosmetic. v3 declares `using: node20`;
+      # GitHub has removed Node 20 from the runners, so v3 is force-run on
+      # Node 24 and fails immediately. That is what made the first run of this
+      # workflow red: step 5 failed in ~20s and every step below it was skipped,
+      # so nothing in this file had ever actually executed. v4.0.4 declares
+      # `using: node24` — checked in the action's own action.yml, not assumed.
+      - uses: android-actions/setup-android@v4
 
       - name: Install dependencies
         run: npm ci
