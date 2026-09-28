@@ -75,3 +75,18 @@ recon-work/
 # android/.gitignore with the platform and it already covers them.
 scripts/capacitor.live-reload.mjs
 
+# Local scratch at the repo root: probe outputs, dev-server launchers and review
+# screenshots. Machine-specific or regenerable, never part of a build. Kept on
+# disk (several are evidence) but kept out of `git status`, so the
+# tree-stays-clean assertion in .github/workflows/ci.yml is verifiable on this
+# machine and not only on the runner. `probe-gate.json` is deliberately NOT
+# listed — it is committed evidence produced by tools/probe-gate.mjs via
+# run-probe.cmd, and an ignore rule would not apply to a tracked path anyway.
+/.workbuddy-ai/
+/t.txt
+/probe-a.json
+/run-probe.cmd
+/run-vite.cmd
+/phase2-00-app.png
+/phase2-live.png
+
