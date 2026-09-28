@@ -1,0 +1,86 @@
+name: CI
+
+# The Phase 6 gate is "CI green from a clean checkout", so this workflow is
+# deliberately the four commands from spec §5 Phase 6 and nothing else:
+# typecheck, test, build, plus the two "definition of done" assertions that are
+# cheap here and expensive to notice later.
+#
+# It runs the SAME commands the phase gates ran locally, in the same order, so a
+# green run means the local gate result is reproducible from a clean clone
+# rather than merely having been true on one machine.
+
+on:
+  push:
+    branches: [main, "impl/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: typecheck · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 1. Types. `npm run build` also runs this via `prebuild`, but running it
+      #    first means a type error is reported as a type error, not as a build
+      #    failure.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # 2. Unit tests. Vitest, node + jsdom. `passWithNoTests: false` in
+      #    vitest.config.js means an empty suite fails rather than passing.
+      - name: Unit tests
+        run: npm test
+
+      # 3. Production build. The safe-delete shim that blocks a second local
+      #    build does not exist on the runner, so this is a clean build.
+      - name: Production build
+        run: npm run build
+
+      # 4. Definition of done #6 — node_modules was tracked until a9208f76 and
+      #    the untrack is exactly the kind of thing that silently comes back.
+      - name: Assert node_modules is not tracked
+        run: |
+          tracked=$(git ls-files | grep -c '^node_modules/' || true)
+          echo "tracked node_modules files: $tracked"
+          if [ "$tracked" -ne 0 ]; then
+            echo "::error::node_modules is tracked again. Untrack it with:"
+            echo "::error::  git rm -r --cached node_modules"
+            exit 1
+          fi
+
+      # 5. `dist/` and the Gradle outputs are gitignored, so a correct build
+      #    leaves the tree clean. A failure here means a build artifact escaped
+      #    .gitignore and would be committed by accident — which is exactly how
+      #    node_modules and dist/ got tracked in the first place.
+      - name: Assert the tree is clean after the build
+        run: |
+          dirty=$(git status --porcelain | grep -c '^' || true)
+          echo "dirty entries after build: $dirty"
+          git status --short
+          if [ "$dirty" -ne 0 ]; then
+            echo "::error::The build dirtied the tree — a build artifact is not gitignored."
+            exit 1
+          fi
+
+      - name: Upload web bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowie-web-dist
+          path: dist/
+          retention-days: 7
