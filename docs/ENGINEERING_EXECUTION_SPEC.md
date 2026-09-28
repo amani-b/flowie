@@ -425,29 +425,32 @@ silently substituted:
    (never hangs), and the object URL is released on the way out. Pixel-level
    equivalence is a Phase 7 device concern (§8 row 17).
 
-**CI — written, gate still OPEN.** `.github/workflows/ci.yml`
+**CI — green on a runner, gate CLOSED.** `.github/workflows/ci.yml`
 (typecheck → test → build, plus the `node_modules`-untracked and
 tree-stays-clean assertions) and `.github/workflows/android.yml` (JDK 21 +
 Android SDK + `:app:assembleDebug`, `:app:testDebugUnitTest`,
 `:app:assembleDebugAndroidTest`, then the merged-permission and
 applicationId assertions).
 
-Both parse (validated with a YAML loader) and every `run` assertion was
-executed locally against the real APK — including two negative cases proving
-the permission assertion fails when it should (a `CAMERA` permission, and a
-missing `INTERNET`). What has **not** happened is a real run on a runner:
-there is no push, so "CI green from a clean checkout" is unproven. That is
-the one remaining Phase 6 gate item, and it needs a push, which is not the
-implementer's to make.
+The first push made the gate real, and it went red — not in this phase's work,
+but in a pinned action. `android-actions/setup-android@v3` failed at step 5 and
+every later step was `skipped`, so **none** of the assertions above had ever
+executed. v3 declares `using: node20`; GitHub no longer ships Node 20 on the
+runners, so it is force-run on Node 24 and dies immediately. Fixed in `b79b7ccd`
+(v3 → v4.0.4, which declares `using: node24`; `setup-java` v4 → v5 for the same
+reason plus its announced end of updates). Detail in §9.
+
+Both workflows are then green on `b79b7ccd` — `CI` in 55s, `Android` in ~2 min,
+all 19 steps including the permission and applicationId assertions. Every
+assertion that had only ever been exercised locally has now run on a runner.
 
 **Still outstanding in this phase:** the retired Supabase edge functions were
-not deleted from the dashboard. That needs credentials and a live project, and
-the spec is explicit that the repo copy stays until CI is green — so it is
-correctly blocked behind the push above, not skipped.
+not deleted from the dashboard. That needs credentials and a live project the
+implementer does not have; the repo copy stays until the deletion is done.
 
 - Verify: `npm run typecheck`, `npm test`, `npm run build`,
   `git ls-files | grep -c node_modules` = 0.
-- Gate: CI green from clean checkout. **OPEN — needs the first push.**
+- Gate: CI green from clean checkout. **CLOSED** — `phase/6-done` → `b79b7ccd`.
 
 ### Phase 7 — Device QA + docs sync
 
@@ -832,6 +835,45 @@ correctly blocked behind the push above, not skipped.
   `dist/` tracked = 0, 261 tracked files, `tsc --noEmit` 0 errors, 8 test files
   / 79 tests green.
 
+- PHASE 6 GATE CLOSED — THE FIRST RUN WAS RED, AND IT WAS AN ACTION, NOT THE CODE
+  (2026-09-28). Pushing `impl/phases-0-7` made the gate real for the first time.
+  `ci.yml` went green in 55s. `android.yml` went red in 25s — and red in the most
+  misleading way available: step 5 failed and **every step after it was skipped**,
+  so not one of this project's commands or assertions had ever run. A red gate
+  that never executed the thing it guards is indistinguishable from a gate that
+  does not work — the same hazard this log recorded one commit earlier for the
+  tree-stays-clean assertion.
+
+  The failing step was `android-actions/setup-android@v3`, and the cause was
+  settled without the log: v3's own `action.yml` declares `using: node20`, and
+  GitHub has removed Node 20 from the runners, so v3 is force-run on Node 24 and
+  fails at startup. `v4.0.4` — published 2026-09-17, eleven days before this run —
+  declares `using: node24`. The run's own annotation had listed v3 among the
+  actions being force-migrated, and the action carries an open "Node 24 Migration"
+  issue. Fixed in `b79b7ccd`: `setup-android` v3 → v4, and `setup-java` v4 → v5
+  (also a Node 20 action, and GitHub has announced v4 receives no further updates;
+  it worked on this run, which is exactly why it was worth doing before it stopped).
+
+  Deliberately NOT bumped: `actions/checkout@v4`, `actions/setup-node@v4`,
+  `actions/upload-artifact@v4`. Same Node 20 deprecation warning, and they ran
+  fine under the forcing. Changing three more actions in the same commit would
+  have blurred which change fixed what. They remain a standing hazard: the next
+  time one of them breaks, the cause is this, not the code.
+
+  Both workflows are then green on `b79b7ccd` — `CI` 55s, `Android` ~2 min, 19/19
+  steps including `Assert the merged permission set` and `Assert the application
+  id`. Phase 5 carry-forward 2 is now enforced on a runner, not merely locally.
+
+  Two environment facts, because both cost time here. (a) `gh` IS authenticated
+  (account `amani-b`, scopes `repo, workflow, gist, read:org`), so private-repo CI
+  status is readable; a note claiming otherwise was repeated instead of checked,
+  and `gh auth status` settles it in a second. (b) `gh run view --log` /
+  `--log-failed` do NOT work from this machine — the log blob host
+  (`results-receiver.actions.githubusercontent.com`) 502s through its proxy while
+  `api.github.com` succeeds from the same shell. Per-step conclusions
+  (`gh api .../actions/runs/<id>/jobs`) plus the failing action's own `action.yml`
+  were sufficient to diagnose this with no log text at all.
+
 ## 10. Implementer handoff prompt (single source)
 
 The copy-pasteable handoff prompt lives in exactly one place:
@@ -1059,15 +1101,19 @@ What the review changed in the record, rather than in the code:
 Not verified at this gate, and correctly deferred to Phase 7: Play Store
 signing (debug APK only) and the full device matrix (§8 rows 1–18).
 
-### Phase 6 — Hygiene, tests, CI — **CODE-DONE; GATE OPEN**
+### Phase 6 — Hygiene, tests, CI — **GATE PASSED** (`phase/6-done`)
 
-Evidence: `.github/workflows/{ci,android}.yml`, the three new test files, and
-`docs/phase5/merged-permissions.txt` (added during the Phase 5 sign-off).
+Evidence: `.github/workflows/{ci,android}.yml`, the three new test files,
+`docs/phase5/merged-permissions.txt`, and the runner results for `b79b7ccd`.
 
 Independent review of `a33828bf` granted **code-done** and withheld
-`phase/6-done` — which is exactly what §5 Phase 6 already claimed, so nothing
-in the code needed changing. The gate is "CI green from a clean checkout" and no
-runner has run either workflow: the branch has no upstream. Headline numbers:
+`phase/6-done` — correctly, because the gate is "CI green from a clean checkout"
+and the branch had no upstream. The first push then made the gate real, and the
+Android workflow went **red in 25s** — in a pinned action, not in this phase's
+work: `android-actions/setup-android@v3` failed at step 5 and every later step was
+`skipped`, so none of the assertions below had ever executed. Fixed in `b79b7ccd`
+(v3 → v4, `setup-java` v4 → v5), after which both workflows are green. Headline
+numbers:
 
 | Check | Result |
 | --- | --- |
@@ -1078,21 +1124,22 @@ runner has run either workflow: the branch has no upstream. Headline numbers:
 | `git ls-files \| grep -c '^dist/'` | **0** |
 | Tracked files | 261 |
 | `git status --porcelain` after a build | **empty** — the root scratch is gitignored now |
-| Workflow YAML | parses under a YAML loader (both files) |
-| `android.yml` assertions | executed locally against the real APK; negative cases fail correctly |
+| `CI` workflow on a runner | **success**, 55s (`b79b7ccd`) |
+| `Android` workflow on a runner | **success**, ~2 min, 19/19 steps (`b79b7ccd`) |
+| `Assert the merged permission set` | **executed on a runner** — carry-forward 2 enforced, not just local |
+| `Assert the application id` | **executed on a runner** |
 
 Closed here, verified rather than accepted: all three Phase 5 carry-forwards
 (§9), and the review's untracked-scratch note — the tree-stays-clean assertion
 is now exercisable on this machine, not only on the runner.
 
-Still open, and none of it skippable:
+Still open — the only thing left in this phase:
 
-- **The push.** `impl/phases-0-7` has no upstream, so the runners have never
-  run. Until they do, "CI green from a clean checkout" is unproven, and this
-  phase is not done.
-- **Retired Supabase edge functions** — still not deleted from the dashboard.
-  Needs credentials and a live project; the repo copy stays until CI is green.
-- **Phase 7** must not start before the push (device matrix §8, `docs/ANDROID.md`).
+- **Retired Supabase edge functions** — not deleted from the dashboard. Needs
+  credentials and a live project the implementer does not have; the repo copy
+  stays until the deletion is done, per this phase's text.
+
+Phase 7 is unblocked: the device matrix (§8) and `docs/ANDROID.md`.
 
 
 
