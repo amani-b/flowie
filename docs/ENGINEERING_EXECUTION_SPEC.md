@@ -252,7 +252,7 @@ DECISION = locked. PLANNED = specified, not implemented.
 | 2 | Job queue + recon cache + honest progress | UI never blocks; cancel/retry work; identical re-import = 0 calls |
 | 3 | Persist/selector/render cost | Snapshot <100KB @40 garments; no `data:` bytes; granular selectors |
 | 4 | UI/UX pass | Checklist §7 green; zoom restored; 44px targets |
-| 5 | Capacitor Android | `assembleDebug` green; installs + runs on device |
+| 5 | Capacitor Android | `:app:assembleDebug` green; installs + runs on device |
 | 6 | Hygiene, tests, CI | `npm test` green; node_modules untracked; CI builds APK |
 | 7 | Device QA + docs sync | Verification matrix green; spec/handoff synced |
 
@@ -351,9 +351,12 @@ DECISION = locked. PLANNED = specified, not implemented.
 
 ### Phase 5 — Capacitor Android (same build, CLI only)
 
-- Deps: `@capacitor/core@8 @capacitor/cli@8 + camera/haptics/statusbar/
-  preferences/share` as needed — minimal set. `npx cap init Flowie
-  app.flowie --web-dir=dist`; `npx cap add android`.
+- Deps: `@capacitor/core@8 @capacitor/cli@8 @capacitor/android@8` +
+  haptics/statusbar/app as needed — minimal set. **`@capacitor/android` is not
+  optional and must be installed BEFORE `cap add android`** (see §9, Phase 5
+  lesson 2 — adding the platform first produces a project under the default
+  `com.getcapacitor.myapp` identity that cannot be re-added). `npx cap init
+  Flowie app.flowie --web-dir=dist`; `npx cap add android`.
 - `capacitor.config.ts` (`appId app.flowie`, `webDir dist`);
   `src/lib/native.ts` (ONLY Capacitor import site: isNative/platform/
   statusbar/haptic/backbutton); `App.tsx` back handler
@@ -361,29 +364,74 @@ DECISION = locked. PLANNED = specified, not implemented.
 - `AndroidManifest`: INTERNET (+VIBRATE if needed). NO camera/storage
   perms (system picker needs none). Edge-to-edge so existing safe-area
   padding works. `scripts/capacitor.live-reload.mjs` git-ignored, never
-  committed. JAVA_HOME = JDK 21 for every Gradle call.
+  committed. JAVA_HOME = JDK 21 for every Gradle call — pin it explicitly,
+  because PATH `java` on this machine is Java 8 (§9, Phase 5 lesson 1).
 - Verify: `npm run build`, `npx cap sync android`,
-  `cd android && ./gradlew assembleDebug`, `adb install`, launch, logcat,
+  `cd android && ./gradlew :app:assembleDebug` (**never a bare
+  `assembleDebug`** — §9, Phase 5 lesson 3), `adb install`, launch, logcat,
   back-button matrix, screenshots.
 - Gate: installable APK running on the physical device.
 
 ### Phase 6 — Hygiene, tests, CI
 
-- Untrack `node_modules` (`git rm -r --cached node_modules`, keep working
-  files; .gitignore already lists it). Decide on `dist/out/recon-work/
-  *-review/references/codex_video_stills/flowie-app-handoff.zip`:
-  untrack or leave (record decision in §9). Delete retired edge functions
-  from Supabase dashboard (keep in git history, do NOT delete from repo
-  until CI is green — old plan's "delete" was ambiguous).
-- Vitest + happy-dom: `imagePipeline`, `jobQueue`, `reconCache`,
-  `merge/migrate/partialize` (v13), selector/render smoke. Add
-  `npm test` script. No E2E downloads.
-- `.github/workflows/ci.yml` (typecheck+test+build) +
-  `.github/workflows/android.yml` (JDK 21 + SDK cmdline + Gradle wrapper
-  → APK/AAB artefacts).
+**Hygiene — done, and done early.** `node_modules` was untracked in
+`a9208f76` and `dist/` in `f2387247` (both recorded in §9). The review/
+reference directories were deliberately KEPT tracked (`240dbe64`). Decision
+recorded in §9; nothing left open here.
+
+**Tests — done.** `npm test` is `vitest run` (it already existed; this phase
+did not add it). 8 files, **79 tests, all green**:
+
+| File | Covers |
+| --- | --- |
+| `src/services/jobQueue.test.ts` | serial FIFO, cancel, failure isolation, retry, stages |
+| `src/services/reconCache.test.ts` | cache key determinism, namespacing, bounded memory layer |
+| `src/services/uploadQueue.test.ts` | consumer-safe callbacks (the omitted-`onProgress` device bug) |
+| `src/store/jobsStore.test.ts` | interrupted-job handoff, queue → store mirror |
+| `src/store/persistGate.test.ts` | the Phase 3 gate: <100 KB @40 garments, no `data:` bytes |
+| `src/lib/imagePipeline.test.ts` | **new** — fallback error/timeout semantics, object-URL release |
+| `src/store/migrations.test.ts` | **new** — v13 read-side strip, v1 fall-through, merge hardening |
+| `src/store/selectors.test.ts` | **new** — matrix row 5 as a source assertion, tile identity |
+
+Two deliberate deviations from the text above, both recorded rather than
+silently substituted:
+
+1. **jsdom, not happy-dom.** `happy-dom` is not installed and `jsdom` is.
+   The choice is contained to a per-file `@vitest-environment jsdom` docblock
+   — the default environment in `vitest.config.js` is plain `node`, and only
+   the files that genuinely need `localStorage` or `document` opt in. Adding a
+   second DOM implementation to satisfy the wording would be cost with no
+   benefit.
+2. **`imagePipeline` is tested at its seams, not end to end.** Real downscale,
+   JPEG quality stepping and pixel sampling need a working canvas, which
+   neither jsdom nor node provides. What is asserted instead is the part Phase 1
+   actually fixed: every failure rejects promptly with a presentable message
+   (never hangs), and the object URL is released on the way out. Pixel-level
+   equivalence is a Phase 7 device concern (§8 row 17).
+
+**CI — written, gate still OPEN.** `.github/workflows/ci.yml`
+(typecheck → test → build, plus the `node_modules`-untracked and
+tree-stays-clean assertions) and `.github/workflows/android.yml` (JDK 21 +
+Android SDK + `:app:assembleDebug`, `:app:testDebugUnitTest`,
+`:app:assembleDebugAndroidTest`, then the merged-permission and
+applicationId assertions).
+
+Both parse (validated with a YAML loader) and every `run` assertion was
+executed locally against the real APK — including two negative cases proving
+the permission assertion fails when it should (a `CAMERA` permission, and a
+missing `INTERNET`). What has **not** happened is a real run on a runner:
+there is no push, so "CI green from a clean checkout" is unproven. That is
+the one remaining Phase 6 gate item, and it needs a push, which is not the
+implementer's to make.
+
+**Still outstanding in this phase:** the retired Supabase edge functions were
+not deleted from the dashboard. That needs credentials and a live project, and
+the spec is explicit that the repo copy stays until CI is green — so it is
+correctly blocked behind the push above, not skipped.
+
 - Verify: `npm run typecheck`, `npm test`, `npm run build`,
   `git ls-files | grep -c node_modules` = 0.
-- Gate: CI green from clean checkout.
+- Gate: CI green from clean checkout. **OPEN — needs the first push.**
 
 ### Phase 7 — Device QA + docs sync
 
@@ -626,8 +674,18 @@ DECISION = locked. PLANNED = specified, not implemented.
   `package com.getcapacitor.myapp`, so the build died on **duplicate class**.
   Recovery is `rm -rf android` and re-add, NOT patching — the damage spans
   build.gradle, strings.xml and three Java files. The regenerated project is
-  correct (`app.flowie` throughout). The template's `ExampleInstrumentedTest`
-  also asserts `com.getcapacitor.app`; corrected to `app.flowie`.
+  correct (`app.flowie` in `namespace`, `applicationId` and `strings.xml`).
+  **CORRECTION (Phase 6).** An earlier draft of this entry said the template
+  test was "corrected to `app.flowie`". That was true of the ASSERTION and
+  false of the PACKAGE. `ExampleInstrumentedTest`'s
+  `assertEquals("app.flowie", …)` had been fixed, but both template tests still
+  sat at `src/{test,androidTest}/java/com/getcapacitor/myapp/` and still
+  declared `package com.getcapacitor.myapp` — a package that matches no source
+  root, which `assembleDebug` never compiles and therefore never complains
+  about, and which would have failed the moment `android.yml` compiled the test
+  source sets. Both files were moved to `java/app/flowie/` with
+  `package app.flowie` in Phase 6 (see the entry below); they now compile under
+  `:app:testDebugUnitTest` and `:app:assembleDebugAndroidTest`.
   (3) `./gradlew assembleDebug` IS THE WRONG TARGET. A bare task name matches
   every module, so the library modules build AARs, which pulls in
   `extractDebugAnnotations` and four lint/compiler jars (`lint-checks`,
@@ -659,6 +717,65 @@ DECISION = locked. PLANNED = specified, not implemented.
   two back presses must not have a CDP round-trip between them.
   Not verified here: Play Store signing (debug APK only) and the full device
   matrix — both Phase 7.
+
+- PHASE 5 GATE SIGN-OFF + CARRY-FORWARDS (2026-09-28). An independent review of
+  `58558e2a` returned **CONDITIONAL GO**: the §4 Phase 5 gate ("installable APK
+  running on the physical device") is met on the committed artifacts, no
+  re-loop, and `phase/5-done` granted with three carry-forwards recorded. None
+  blocked Phase 6. All three are now closed, and the two that could be verified
+  on this machine were verified rather than accepted.
+
+  (1) TEMPLATE PACKAGE PATHS — FIXED, and the earlier §9 sentence corrected.
+  The review found `ExampleUnitTest.java` and `ExampleInstrumentedTest.java`
+  still declaring `package com.getcapacitor.myapp` under matching directory
+  paths, while the §9 entry claimed the template was "correct (`app.flowie`
+  throughout)". The reviewer's read was right and the entry was wrong: the
+  assertion had been fixed, the package had not. Both files now live at
+  `src/{test,androidTest}/java/app/flowie/` with `package app.flowie`, and
+  — because "the paths look right" is not evidence — both source sets were
+  compiled: `:app:testDebugUnitTest` (1 test, 0 failures) and
+  `:app:assembleDebugAndroidTest` (BUILD SUCCESSFUL). `assembleDebug` alone
+  would never have caught this, which is why the android workflow compiles both
+  test source sets instead of only assembling the app.
+
+  (2) MERGED PERMISSIONS — VERIFIED, not accepted. The review hypothesised that
+  `VIBRATE` arrives from the haptics plugin via the manifest merger. Confirmed,
+  with attribution from the merger report rather than inference:
+  `INTERNET` is ADDED from `app/src/main/AndroidManifest.xml:40` (the only
+  hand-written one); `VIBRATE` is ADDED from `[:capacitor-haptics]`; and
+  `app.flowie.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` is auto-injected by
+  `androidx.core:core:1.17.0` for API 33+ receivers — not a capability, not
+  requestable, expected. Zero matches for CAMERA, EXTERNAL_STORAGE, READ_MEDIA_*,
+  RECORD_AUDIO or any location permission anywhere in the merger report. Full
+  evidence in `docs/phase5/merged-permissions.txt`. The review asked for this in
+  Phase 7; it was cheaper to settle now, and it is now a CI step so it cannot
+  regress silently. The APK was independently re-packaged on this machine
+  (sha256 `44a87d8f1814c33dd30627fb6b52418f969db35e946b857566cc3c728ea78afe`,
+  6 270 768 bytes) — the review had noted no independent build was run.
+
+  (3) SPEC AMENDMENTS — DONE. `:app:assembleDebug` and the
+  `@capacitor/android`-before-`cap add` ordering were promoted from §9 prose
+  into §5 Phase 5 and the §4 gate table, and the JAVA_HOME pin is now stated
+  there too. `docs/IMPLEMENTER_HANDOFF.md` carried the same bare
+  `assembleDebug` in its definition-of-done and was corrected as well — it is
+  the copy-pasteable handoff, so leaving it stale would have re-seeded the bug
+  on the next pass.
+
+- PHASE 6 FINDING: a retired slice is dropped by the VERSION, not by `merge`.
+  Writing `src/store/migrations.test.ts` surfaced an assumption worth recording.
+  The intent was to assert "a retired slice never rehydrates" and the natural
+  way to write it was to seed `closetUpgrade` with `version: 13`. That test
+  FAILED: `merge` spreads the persisted state wholesale, so an unknown
+  top-level key passes straight through, and the drop only happens because
+  `migrate`'s `version < 9`/`< 10`/`< 12` branches fire. The seeded input is not
+  a reachable state — `partialize` at v13 cannot emit the key, and any snapshot
+  holding it necessarily carries an older version — so this is **not a live
+  defect and no code was changed for it**. It is recorded because the
+  consequence is real: bumping `version` without adding the matching migration
+  would leak the slice, and the only thing preventing that today is the version
+  arithmetic. The test now pins both sides of the behaviour (same payload,
+  v8 → dropped, v13 → passed through) so the mechanism is documented rather
+  than assumed.
 
 ## 10. Implementer handoff prompt (single source)
 
@@ -850,6 +967,42 @@ and a five-screen re-render per switch) that no diff or screenshot would have
 shown — both are in the evidence doc §3. Its device gate is **closed**: the
 probe ran end to end on the attached handset in both motion modes and both
 themes.
+
+### Phase 5 — Capacitor Android shell — **GATE PASSED** (`phase/5-done`)
+
+Evidence: `docs/phase5/back-button-matrix.json` (11 passed / 0 failed),
+`docs/phase5/{01-launch,02-dark-home,03-light-theme}.png`, and — added during
+the Phase 6 sign-off — `docs/phase5/merged-permissions.txt`.
+
+Independent review of `58558e2a` returned **CONDITIONAL GO**: gate met on the
+committed artifacts, `phase/5-done` granted with three carry-forwards, none of
+which blocked Phase 6. All three are closed; see §9 for the detail. Headline
+numbers:
+
+| Check | Result |
+| --- | --- |
+| `:app:assembleDebug` | BUILD SUCCESSFUL (independently re-run on this machine) |
+| Back-button matrix | **11 / 11 passed** on the physical handset |
+| Merged permissions | `INTERNET` + `VIBRATE` + AndroidX's receiver permission; **no camera/storage/media/location** |
+| `VIBRATE` attribution | ADDED from `[:capacitor-haptics]` via the manifest merger |
+| APK | 6 270 768 bytes, sha256 `44a87d8f…ea78afe` |
+| `:app:testDebugUnitTest` | 1 test, 0 failures |
+| `:app:assembleDebugAndroidTest` | BUILD SUCCESSFUL (proves the moved test packages compile) |
+| `env(safe-area-inset-top)` / `-bottom` | 29px / 15px — non-zero, so the WebView really is edge-to-edge |
+
+What the review changed in the record, rather than in the code:
+
+- The §9 claim that the template tests were "correct (`app.flowie`
+  throughout)" was **wrong** and is corrected there: the assertion had been
+  fixed, the package and directory had not. Both are moved now.
+- The `VIBRATE` permission was a hypothesis; it is now attributed from the
+  merger report and asserted in CI.
+- §5 Phase 5 and the §4 gate table still said bare `assembleDebug` and omitted
+  `@capacitor/android`; both are corrected, and `docs/IMPLEMENTER_HANDOFF.md`
+  carried the same stale command and is corrected too.
+
+Not verified at this gate, and correctly deferred to Phase 7: Play Store
+signing (debug APK only) and the full device matrix (§8 rows 1–18).
 
 
 

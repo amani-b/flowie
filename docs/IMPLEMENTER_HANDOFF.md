@@ -100,8 +100,11 @@ DEFINITION OF DONE
      contains no `data:image` bytes.
   5. No whole-array `useAppStore((s) => s.garments)` subscriptions remain.
   6. `git ls-files | grep -c '^node_modules/'` prints 0.
-  7. `./gradlew assembleDebug` produces an installable APK, and CI produces
-     the same artifact from a clean checkout.
+  7. `./gradlew :app:assembleDebug` produces an installable APK, and CI produces
+     the same artifact from a clean checkout. (Never a bare `assembleDebug` —
+     a bare task name matches every module and builds the library AARs too.
+     Pin JAVA_HOME to JDK 21; PATH `java` may be Java 8. See spec §9 Phase 5
+     lessons 1 and 3, now also stated in §5.)
   8. Every row of the 18-row verification matrix in spec §8 is green or has a
      written, accepted reason recorded in docs/BASELINE.md.
   9. Reconstruction output is visually equivalent to the pre-change baseline

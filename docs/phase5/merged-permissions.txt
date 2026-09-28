@@ -1,0 +1,89 @@
+Flowie — Phase 5 carry-forward 2: MERGED permission set, verified
+=================================================================
+
+Question the Phase 5 review left open
+-------------------------------------
+The source manifest (`android/app/src/main/AndroidManifest.xml`) declares only
+INTERNET. The review accepted a *hypothesis* that VIBRATE arrives via the
+manifest merger from the haptics plugin, and asked for it to be confirmed with
+`aapt dump permissions` or a merged-manifest check.
+
+Status: CONFIRMED. Not a hypothesis any more. The evidence is below, and the
+check is now enforced automatically in CI (`.github/workflows/android.yml`,
+step "Assert the merged permission set") so it cannot silently regress.
+
+Artifact under test
+-------------------
+  path    android/app/build/outputs/apk/debug/app-debug.apk
+  bytes   6 270 768
+  sha256  44a87d8f1814c33dd30627fb6b52418f969db35e946b857566cc3c728ea78afe
+  built   independently re-packaged on this machine, 2026-09-28, via
+          JAVA_HOME=<JDK 21> ./gradlew :app:assembleDebug
+          (only `:app:packageDebug` re-executed; every other task up-to-date,
+           which is itself the evidence that the main source set was unchanged
+           by the Phase 6 test-file move — that touched test sources only)
+
+The toolchain used to read it
+-----------------------------
+  $ANDROID_HOME/build-tools/36.0.0/aapt.exe dump permissions <apk>
+
+aapt output — exactly four lines, no others
+-------------------------------------------
+  package: app.flowie
+  uses-permission: name='android.permission.INTERNET'
+  uses-permission: name='android.permission.VIBRATE'
+  permission: app.flowie.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+  uses-permission: name='app.flowie.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'
+
+Where each one comes from
+-------------------------
+Taken from the manifest merger report, which names the contributing module
+(`android/app/build/outputs/logs/manifest-merger-debug-report.txt`). `aapt`
+alone cannot attribute a permission to its source; this is the part that
+actually settles the question.
+
+  INTERNET
+    ADDED from D:\Projects\flowie-app\android\app\src\main\AndroidManifest.xml:40
+    Hand-written, as the spec intends. This is the only permission the project
+    declares itself.
+
+  VIBRATE
+    ADDED from [:capacitor-haptics]
+      node_modules/@capacitor/haptics/android/build/intermediates/
+      merged_manifest/debug/processDebugManifest/AndroidManifest.xml:7
+    Library-injected. Confirms the review's hypothesis: `buzz()` → haptics is
+    the reason it is present, and the app never asked for it. Keeping it is
+    correct — `appStore.ts` routes `buzz()` through `haptic()` and a haptic
+    without VIBRATE is a silent no-op.
+
+  app.flowie.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+    ADDED from [androidx.core:core:1.17.0]
+    Auto-injected by AndroidX for apps targeting API 33+, so that internally
+    registered broadcast receivers are not exported by default. Not a
+    capability: it is not requestable, not user-visible and grants nothing.
+    Its presence is expected and should not be "cleaned up".
+
+The permissions that must NOT be there
+--------------------------------------
+Searched the whole merger report for CAMERA, EXTERNAL_STORAGE, READ_MEDIA_*,
+RECORD_AUDIO and ACCESS_FINE_LOCATION: **zero matches**. Nothing in the
+dependency graph injects a media or location capability.
+
+This matters because the import path uses the system photo picker, which needs
+no permission at all — the spec is explicit that camera/storage must stay out
+(§5 Phase 5). A future plugin that drags one in would be a user-visible
+regression in the Play listing, which is why the CI step asserts the absence
+rather than a one-off human check.
+
+Reproduce
+---------
+  cd android
+  JAVA_HOME="/c/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot" \
+    ./gradlew :app:assembleDebug
+  "$ANDROID_HOME/build-tools/36.0.0/aapt.exe" dump permissions \
+    app/build/outputs/apk/debug/app-debug.apk
+
+Not covered here
+----------------
+This is the debug APK. Release/Play signing and the full device matrix remain
+Phase 7 work (§8 row 16), as the Phase 5 review stated.
