@@ -915,7 +915,7 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
               </button>
             </div>
           ) : null}
-          {g.photo && reconClassFor(g.category) && !g.hasPrint && printHint ? (
+          {g.photo && reconClassFor(g.category) && !g.hasPrint && printHint && !reconLive ? (
             <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-line bg-accsoft px-3.5 py-2.5">
               <p className="text-[11px] font-bold leading-snug text-ink">
                 This looks like it has a logo or print. The detail renderer keeps those legible (~60 s) —
