@@ -44,6 +44,15 @@ export interface TaggingResult {
   formality: Formality;
   tags: string[];
   confidence: number;
+  /**
+   * Gemini's read of whether the garment carries a logo, graphic, text or
+   * print. A HINT, never a decision: the wearer's `hasPrint` flag (which
+   * routes to the detail renderer) stays wearer-set, because the detail
+   * renderer measurably invents detail on plain garments — a false positive
+   * must not silently re-route. `undefined` means "no opinion" (the
+   * heuristic path can't see structure, so it never claims one).
+   */
+  printHint?: boolean;
 }
 
 const CATEGORY_KEYWORDS: Record<Category, string[]> = {
@@ -267,7 +276,22 @@ export async function tagGarmentHeuristic(
     formality: guessFormality(safeName),
     tags: [],
     confidence,
+    // No print opinion: the pixel path can sample colors but cannot see a
+    // small logo on a solid fabric, and a wrong hint costs the wearer a
+    // decision — so the fallback stays silent rather than guessing.
+    printHint: undefined,
   };
+}
+
+/**
+ * Parse the model's `printHint` field. Strict on purpose: only a real boolean
+ * counts, anything else (missing, string, null) is "no opinion". The hint
+ * powers a suggestion the wearer confirms, so a hallucinated `true` would
+ * push a plain garment toward the detail renderer — the exact failure the
+ * klein spike measured. Exported for direct testing of that contract.
+ */
+export function parsePrintHint(raw: unknown): boolean | undefined {
+  return typeof raw === "boolean" ? raw : undefined;
 }
 
 /**
@@ -288,8 +312,8 @@ async function viaGemini(
     : await blobToDataUrl(image as Blob).then((u) => u.slice(u.indexOf(",") + 1));
   const prompt =
     `You are a precise garment analyst. Look at this clothing photo and return ONLY valid JSON:\n` +
-    `{"name":"brief descriptive name","category":"one of: top/bottom/dress/outerwear/shoes/accessory","colors":["#RRGGBB", ...],"pattern":"solid|striped|colorblock|other","colorFamily":"one of: neutral/warm/cool/earth/accent","warmth":1-3,"formality":1-3,"tags":["optional keywords"]}\n` +
-    `Rules. Category must match exactly one option. colors: 1-3 hex values of the ACTUAL garment fabric (most prominent first) — describe the dominant color, then any real secondary colors; ignore the photo backdrop, hanger, shadows and shading gradients. pattern: classify honestly — "solid" for a plain single-color garment (shadows, folds and texture are still solid), "striped" ONLY for clear repeating stripes, "colorblock" for large distinct color regions, "other" for plaid/checks/florals/graphics/dots/prints. When in doubt between solid and patterned, choose solid. Warmth: 1=light/summer, 2=mid-season, 3=heavy/winter. Formality: 1=casual, 2=smart, 3=formal.`;
+    `{"name":"brief descriptive name","category":"one of: top/bottom/dress/outerwear/shoes/accessory","colors":["#RRGGBB", ...],"pattern":"solid|striped|colorblock|other","colorFamily":"one of: neutral/warm/cool/earth/accent","warmth":1-3,"formality":1-3,"printHint":true|false,"tags":["optional keywords"]}\n` +
+    `Rules. Category must match exactly one option. colors: 1-3 hex values of the ACTUAL garment fabric (most prominent first) — describe the dominant color, then any real secondary colors; ignore the photo backdrop, hanger, shadows and shading gradients. pattern: classify honestly — "solid" for a plain single-color garment (shadows, folds and texture are still solid), "striped" ONLY for clear repeating stripes, "colorblock" for large distinct color regions, "other" for plaid/checks/florals/graphics/dots/prints. When in doubt between solid and patterned, choose solid. printHint: true ONLY when the garment carries a logo, graphic, text or print (brand marks, slogans, artwork, repeated lettering); false for plain fabrics and for stripes/colorblocks alone — those are pattern, not print. When in doubt, false. Warmth: 1=light/summer, 2=mid-season, 3=heavy/winter. Formality: 1=casual, 2=smart, 3=formal.`;
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`,
@@ -361,6 +385,7 @@ async function viaGemini(
     formality: (parsed.formality && parsed.formality >= 1 && parsed.formality <= 3) ? parsed.formality : 2,
     tags: Array.isArray(parsed.tags) ? parsed.tags : [],
     confidence: 0.85,
+    printHint: parsePrintHint(parsed.printHint),
   };
 }
 
@@ -464,11 +489,18 @@ export async function tagGarmentPhoto(
  * source content (see `services/reconCache.ts`) — re-importing identical
  * bytes must not spend a second remote call. Optional because manual/legacy
  * records have no hash; those fall back to a length-based cache key.
+ *
+ * `printConfirmed` is the wearer's explicit answer to the model's
+ * `printHint` (asked during review). It is the ONLY path that may write the
+ * wearer-set `hasPrint` flag from a tagging result — the hint itself never
+ * picks the renderer, because the detail renderer measurably invents detail
+ * on plain garments (see spec §9, klein detail-spike verdict).
  */
 export function taggingToGarment(
   t: TaggingResult,
   imageDataUrl?: string,
-  sha256?: string
+  sha256?: string,
+  printConfirmed?: boolean
 ): Omit<Garment, "id" | "createdAt"> {
   return {
     name: t.name,
@@ -481,6 +513,7 @@ export function taggingToGarment(
     warmth: t.warmth,
     formality: t.formality,
     kind: t.category === "accessory" ? (t.tags.find((tag) => ["scarf", "cap", "bag"].includes(tag)) as any) : undefined,
+    hasPrint: printConfirmed || undefined,
     photo: imageDataUrl,
     photoSha256: sha256 || undefined,
   };

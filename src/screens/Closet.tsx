@@ -35,6 +35,9 @@ interface PendingGarment extends TaggingResult {
   /** Prepared-image hash, carried through review so the recon cache still
    *  matches when the item is saved later (Phase 2). */
   photoSha256?: string;
+  /** The wearer confirmed the model's `printHint` during review — the only
+   *  path that turns a hint into the wearer-set hasPrint flag. */
+  printConfirmed?: boolean;
 }
 const SHORT_CAT: Record<Category, string> = {
   top: "Top",
@@ -77,6 +80,36 @@ export const takeReviewStash = (): PendingGarment[] | null => {
 };
 
 export const peekReviewStash = (): PendingGarment[] | null => reviewStash;
+
+/* ------------------------ print hints (ephemeral) ------------------------ */
+
+/**
+ * One-time "this looks like it has a logo or print" nudges, keyed by the
+ * prepared-image content hash, for garments that were added WITHOUT review
+ * (the default path — the sheet closes and the item is saved as it tags).
+ *
+ * Deliberately NOT a Garment field: spec §6 locks the field names, and the
+ * wearer's `hasPrint` flag must stay wearer-set — the detail renderer
+ * measurably invents detail on plain garments (spec §9, klein verdict), so a
+ * model guess must never silently pick the renderer. The hint rides from the
+ * import callback to the first detail-sheet open and is then consumed: one
+ * tap to act, one to dismiss, never persisted, never nagging.
+ *
+ * Entries whose sheet is never opened just sit (a few bytes each, bounded by
+ * import count) — an acceptable leak for a nudge that must outlive a reload
+ * only long enough to reach the wearer.
+ */
+const printHints = new Map<string, boolean>();
+
+const rememberPrintHint = (key: string) => {
+  printHints.set(key, true);
+};
+
+const takePrintHint = (key: string): boolean => {
+  const hit = printHints.get(key) === true;
+  printHints.delete(key);
+  return hit;
+};
 
 export const subscribeReview = (fn: () => void): (() => void) => {
   reviewListeners.add(fn);
@@ -184,6 +217,12 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
         } else {
           // Optimistic: visible in the closet immediately, and recon /
           // sync run behind it exactly as before.
+          // A print hint can't be asked about here (no review screen), so
+          // park it for the first detail-sheet open — keyed by content hash,
+          // which the saved garment carries.
+          if (tags.printHint && garment.photoSha256) {
+            rememberPrintHint(garment.photoSha256);
+          }
           void addGarment(garment, garment.photo);
         }
       },
@@ -230,7 +269,7 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
 
   const confirmAndSave = () => {
     pending.forEach((p) => {
-      const garment = taggingToGarment(p, p.imageDataUrl, p.photoSha256);
+      const garment = taggingToGarment(p, p.imageDataUrl, p.photoSha256, p.printConfirmed);
       addGarment(garment);
     });
     notify(`${pending.length} item(s) added to closet`);
@@ -356,6 +395,36 @@ function AIUploadForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
                       ))}
                     </select>
                   </div>
+
+                  {/* Print hint: the model saw a logo/graphic/text. Asked
+                      HERE so the FIRST reconstruction uses the right
+                      renderer — confirming costs nothing extra, and the
+                      wearer's answer (not the model's guess) sets the flag. */}
+                  {p.printHint && !p.printConfirmed ? (
+                    <div className="flex flex-wrap items-center gap-2 rounded-[12px] border border-line bg-bgdeep px-3 py-2">
+                      <span className="text-[11px] font-bold leading-snug text-ink">
+                        Looks like it has a logo or print — the detail renderer keeps those legible (~60 s).
+                      </span>
+                      <div className="ml-auto flex shrink-0 gap-1.5">
+                        <button
+                          onClick={() => updatePending(p.tempId, { printConfirmed: true })}
+                          className="rounded-full bg-acc px-3 py-1 text-[11px] font-extrabold text-accink transition active:scale-95"
+                        >
+                          Yes, flag it
+                        </button>
+                        <button
+                          onClick={() => updatePending(p.tempId, { printHint: false })}
+                          className="rounded-full border border-line px-3 py-1 text-[11px] font-extrabold text-mut transition active:scale-95"
+                        >
+                          No
+                        </button>
+                      </div>
+                    </div>
+                  ) : p.printConfirmed ? (
+                    <p className="text-[11px] font-bold text-acc">
+                      Flagged for the detail renderer — prints stay legible.
+                    </p>
+                  ) : null}
 
                   {/* Warmth + formality: stack vertically on mobile */}
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -765,6 +834,15 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
   const elapsed = useElapsedSeconds(reconJob?.startedAt);
   const [confirmDel, setConfirmDel] = useState(false);
 
+  // Print hint parked by a no-review import (see `printHints`). Taken, not
+  // peeked: it is a one-time nudge, so opening the sheet consumes it. Acting
+  // on it runs the same store action as the toggle below — there is no
+  // second path to the renderer choice, and no silent re-routing.
+  const [printHint, setPrintHint] = useState(false);
+  useEffect(() => {
+    if (garment?.photoSha256) setPrintHint(takePrintHint(garment.photoSha256));
+  }, [garment?.photoSha256]);
+
   useEffect(() => {
     setConfirmDel(false);
   }, [garment?.id]);
@@ -835,6 +913,31 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
                 <RotateCcw className="h-3.5 w-3.5" />
                 {g.reconStatus === "failed" ? "Try again" : "Reconstruct"}
               </button>
+            </div>
+          ) : null}
+          {g.photo && reconClassFor(g.category) && !g.hasPrint && printHint ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-line bg-accsoft px-3.5 py-2.5">
+              <p className="text-[11px] font-bold leading-snug text-ink">
+                This looks like it has a logo or print. The detail renderer keeps those legible (~60 s) —
+                switching rebuilds the image once.
+              </p>
+              <div className="ml-auto flex shrink-0 gap-1.5">
+                <button
+                  onClick={() => {
+                    setPrintHint(false);
+                    void setGarmentPrint(g.id, true);
+                  }}
+                  className="rounded-full bg-acc px-3 py-1 text-[11px] font-extrabold text-accink transition active:scale-95"
+                >
+                  Use it
+                </button>
+                <button
+                  onClick={() => setPrintHint(false)}
+                  className="rounded-full border border-line px-3 py-1 text-[11px] font-extrabold text-mut transition active:scale-95"
+                >
+                  Not really
+                </button>
+              </div>
             </div>
           ) : null}
           {g.photo && reconClassFor(g.category) ? (
