@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import { withTimeout } from "../lib/utils";
+import { analyzeGarmentBbox, geminiReady } from "./aiStylistService";
 import type { Category } from "../types";
 
 /**
@@ -9,7 +10,9 @@ import type { Category } from "../types";
  *
  * Pipeline per garment, run ONCE at import/upload time:
  *   original photo (untouched, kept on `garment.photo`)
- *     → analyze (stub: full-frame bbox; Qwen3-VL-8B pending)
+ *     → analyze (Gemini garment bbox; full-frame stub as fallback)
+ *     → crop to the bbox (lib/crop) — the crop-first contract the edge
+ *       function documents
  *     → Edge Function `recon-garment` (holds HF_TOKEN + Space IDs)
  *     → renderer by garment.hasPrint: TryOffDiffv2-MGT (~30 s, default)
  *        or FLUX.2-klein detail spike (~60 s, logos/graphics/text)
@@ -22,7 +25,8 @@ import type { Category } from "../types";
  * on the same case but invents details on plain garments (drawstring + side
  * stripes on navy trousers with no source evidence) and shifts color
  * saturation. So: plain → TryOffDiff, print → Klein, chosen by the
- * wearer-set `hasPrint` flag (the stub analyzer cannot detect prints).
+ * wearer-set `hasPrint` flag (the bbox analyzer locates the garment but
+ * cannot see prints — the print HINT comes from tagging, suggest-only).
  * Qwen-Image-Edit-2511 stays parked: 20B bf16 OOMs free ZeroGPU at pack.
  *
  * FREE CONTRACT (prototype-safe):
@@ -68,6 +72,21 @@ export interface ReconBbox {
   height: number;
 }
 
+/**
+ * The full-frame fallback box — the stub's answer, and the test for "this
+ * analysis located nothing", so the caller can skip a pointless crop.
+ */
+export const STUB_BBOX: ReconBbox = { x: 20, y: 20, width: 960, height: 960 };
+
+export function isStubBbox(b: ReconBbox): boolean {
+  return (
+    b.x === STUB_BBOX.x &&
+    b.y === STUB_BBOX.y &&
+    b.width === STUB_BBOX.width &&
+    b.height === STUB_BBOX.height
+  );
+}
+
 export interface ReconAnalysis {
   analyzer: string;
   name: string;
@@ -80,32 +99,73 @@ export interface ReconAnalysis {
 }
 
 /**
- * Analyzer stub (structured-vision contract, Qwen3-VL-8B pending).
- * Current sources are single-garment flat-lays, so detection is the whole
- * frame minus a small margin — same shape the VLM will return, so swapping
- * the stub never touches downstream stages. Worn multi-garment photos need
- * the live analyzer before recon can isolate items.
+ * Analyzer (structured-vision contract).
+ *
+ * v0 was a stub: the full frame minus a margin, because the original sources
+ * were single-garment flat-lays. That assumption broke the moment a worn or
+ * multi-garment photo arrived — the renderer received the whole scene.
+ *
+ * The real analyzer asks Gemini for the garment's bounding box in the same
+ * 1000×1000 grid the stub used, so the downstream contract never changed:
+ * same shape, better numbers. ANY failure (no key, quota, malformed,
+ * network) falls back to the full-frame stub — a worse crop costs render
+ * quality, a thrown analyzer would cost the whole recon job. The stub's
+ * shape IS the fallback contract, by design.
  */
-export function analyzeGarmentPhoto(args: {
+export async function analyzeGarmentPhoto(args: {
   garmentId: string;
   category: Category;
   name: string;
-}): ReconAnalysis | null {
+  photoDataUrl?: string;
+  signal?: AbortSignal;
+}): Promise<ReconAnalysis | null> {
   const reconClass = reconClassFor(args.category);
   if (!reconClass) return null;
+  const part =
+    reconClass === "upper"
+      ? "upperbody"
+      : reconClass === "lower"
+        ? "lowerbody"
+        : "dress";
+
+  if (geminiReady && args.photoDataUrl) {
+    try {
+      // A data URL rides straight through; an http(s) Storage URL is
+      // fetched to bytes inside the bbox reader. Either way a failure
+      // lands on null and the stub below takes over.
+      const isDataUrl = args.photoDataUrl.startsWith("data:");
+      const bbox = await analyzeGarmentBbox(
+        args.photoDataUrl,
+        isDataUrl ? args.photoDataUrl : undefined,
+        args.signal
+      );
+      if (bbox) {
+        return {
+          analyzer: "gemini-bbox-v1",
+          name: args.name,
+          part,
+          color: null,
+          secondaryColor: null,
+          tags: [],
+          boundingBox: bbox,
+          reconClass,
+        };
+      }
+    } catch (e) {
+      // analyzeGarmentBbox already swallows its own failures; this is belt
+      // and braces — a broken analyzer must never fail a recon job.
+      console.warn("[garment-recon] analyzer failed, using full-frame stub:", e);
+    }
+  }
+
   return {
     analyzer: "stub-v0 (Qwen3-VL-8B pending)",
     name: args.name,
-    part:
-      reconClass === "upper"
-        ? "upperbody"
-        : reconClass === "lower"
-          ? "lowerbody"
-          : "dress",
+    part,
     color: null,
     secondaryColor: null,
     tags: [],
-    boundingBox: { x: 20, y: 20, width: 960, height: 960 },
+    boundingBox: { ...STUB_BBOX },
     reconClass,
   };
 }

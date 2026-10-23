@@ -1,4 +1,5 @@
 import type { Garment, Category, ColorFamily, Warmth, Formality } from "../types";
+import type { ReconBbox } from "./garmentRecon";
 import { hexToRgb, withTimeout } from "../lib/utils";
 import { detectPattern, type PixelSample } from "../lib/patternDetect";
 import {
@@ -295,6 +296,112 @@ export function parsePrintHint(raw: unknown): boolean | undefined {
 }
 
 /**
+ * Parse a garment bounding box from the model's JSON: four numbers in the
+ * Wardrobe 1000×1000 normalized system (the image scaled so its larger
+ * dimension is 1000). Strict — anything malformed returns null and the
+ * caller keeps the full-frame stub, because a bad crop costs render quality
+ * while the stub is a known-safe fallback. Clamping keeps a slightly
+ * out-of-range answer usable instead of discarding it.
+ *
+ * Exported for direct testing of the contract.
+ */
+export function parseBbox(raw: unknown): ReconBbox | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const nums = [r.x, r.y, r.width, r.height];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  const [x0, y0, w0, h0] = nums as [number, number, number, number];
+  // Reject non-positive sizes outright; clamp positions into the grid.
+  if (w0 <= 0 || h0 <= 0) return null;
+  const x = Math.min(Math.max(x0, 0), 1000);
+  const y = Math.min(Math.max(y0, 0), 1000);
+  const width = Math.min(w0, 1000 - x);
+  const height = Math.min(h0, 1000 - y);
+  // A degenerate sliver is not a garment — treat as no answer.
+  if (width < 50 || height < 50) return null;
+  return { x, y, width, height };
+}
+
+/** Network ceiling for the bbox call — same discipline as tagging. */
+const BBOX_TIMEOUT_MS = 20_000;
+
+/**
+ * Ask Gemini where the garment is, as a 1000×1000-normalized bounding box.
+ *
+ * This is the first real implementation of the recon analyzer contract (the
+ * stub that preceded it returned the full frame for every photo, so a worn
+ * or multi-garment photo reached the renderer un-cropped). Returns null on
+ * ANY failure — no key, 429, malformed, network — and the caller falls back
+ * to the stub. Never throws: a failed crop costs quality, a thrown analyzer
+ * would cost the whole recon job.
+ */
+export async function analyzeGarmentBbox(
+  image: Blob | string,
+  dataUrl?: string,
+  signal?: AbortSignal
+): Promise<ReconBbox | null> {
+  if (!geminiReady) return null;
+  // Three shapes reach here: a ready data URL (fast path), an http(s) URL
+  // (live-mode `photo`, fetched to bytes), or a Blob. All end as base64.
+  const base64 = dataUrl
+    ? dataUrl.slice(dataUrl.indexOf(",") + 1)
+    : typeof image === "string"
+      ? await fetch(image)
+          .then((r) => {
+            if (!r.ok) throw new Error(`photo fetch HTTP ${r.status}`);
+            return r.blob();
+          })
+          .then((b) => blobToDataUrl(b))
+          .then((u) => u.slice(u.indexOf(",") + 1))
+      : await blobToDataUrl(image).then((u) => u.slice(u.indexOf(",") + 1));
+  const prompt =
+    `You are a precise garment locator. Look at this clothing photo and return ONLY valid JSON:\n` +
+    `{"x":0-1000,"y":0-1000,"width":0-1000,"height":0-1000}\n` +
+    `Rules. The photo may show a garment worn on a person, on a hanger, or laid flat, possibly with other garments or clutter in frame. ` +
+    `Report the bounding box of THE MAIN GARMENT ONLY (the one occupying the most frame area), as a tight rectangle that excludes the background, other garments, hands, hangers, and any person's skin or body. ` +
+    `Use a 1000x1000 normalized grid: scale the image so its LARGER dimension is 1000 and the smaller is centered (letterboxed) within the grid, then give x/y of the top-left corner and width/height of the garment rectangle in those units. ` +
+    `If the garment genuinely fills the frame, a near-full-frame box is correct. If you cannot identify any garment, return {"x":20,"y":20,"width":960,"height":960}.`;
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(BBOX_TIMEOUT_MS)]) : AbortSignal.timeout(BBOX_TIMEOUT_MS),
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: prompt },
+                { inlineData: { mimeType: "image/jpeg", data: base64 } },
+              ],
+            },
+          ],
+          generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
+        }),
+      }
+    );
+    if (!res.ok) {
+      if (res.status === 429) console.warn("[garment-bbox] Gemini quota exceeded — using full-frame fallback");
+      else console.warn(`[garment-bbox] Gemini ${res.status} — using full-frame fallback`);
+      return null;
+    }
+    const json = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) return null;
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    return parseBbox(parsed);
+  } catch (e) {
+    // Aborts propagate as null too — the caller decides what a cancel means.
+    console.warn("[garment-bbox] failed, using full-frame fallback:", e);
+    return null;
+  }
+}
+
+/**
  * Ask Gemini for tags. Accepts a Blob or a data URL.
  *
  * A Blob is encoded here, once, because the Gemini REST payload requires
@@ -390,8 +497,7 @@ async function viaGemini(
 }
 
 /**
- * Pixel-truth clamp: when the sampled pixels show one color owning the
- * garment (>=90%), a patterned label is a hallucination — force solid and
+ * Pixel-truth clamp: when the sampled pixels show one color owning the * garment (>=90%), a patterned label is a hallucination — force solid and
  * keep the sampled colors. Vision models occasionally read shading or
  * texture as pattern; pixels don't lie about area share.
  */

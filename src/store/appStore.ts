@@ -64,7 +64,9 @@ import {
   reconClassFor,
   RECON_DAILY_BUDGET,
   getReconDailyCount,
+  isStubBbox,
 } from "../services/garmentRecon";
+import { cropToBbox } from "../lib/crop";
 
 interface WeatherState {
   status: LoadStatus;
@@ -520,12 +522,18 @@ function runReconJob(id: string): void {
         // Analyzer gate BEFORE any cache or network work: shoes/accessories
         // are photo-only (no recon model) — photo + SVG skeleton stay the
         // finish, zero noise, zero quota. No stage text: nothing is happening.
-        const analysis = analyzeGarmentPhoto({
+        // The analyzer is async since accuracy track A3 (Gemini bbox): a
+        // failure or missing key falls back inside it to the full-frame
+        // stub, so this never rejects for analyzer reasons.
+        const analysis = await analyzeGarmentPhoto({
           garmentId: id,
           category: current.category,
           name: current.name,
+          photoDataUrl: current.photo,
+          signal,
         });
         if (!analysis) return;
+        if (signal.aborted) return;
 
         // Hybrid router: print garments → Klein detail renderer, plain →
         // TryOffDiff (Track 2 verdict — Klein keeps graphics but invents
@@ -573,10 +581,20 @@ function runReconJob(id: string): void {
           }),
         }));
         markStage("recon:request", `garment=${id} renderer=${renderer}`);
+        // Crop to the analyzed garment before spending a call — the
+        // crop-first contract the edge function documents, and what the
+        // offline harness has always done before calling a Space. The
+        // stub's full-frame box is a no-op trim, so only a real bbox is
+        // worth the decode+encode; any crop failure sends the full photo,
+        // exactly what the stub era did. The cache key stays the ORIGINAL
+        // photo's hash: the crop is derived from it, not a new identity.
+        const photoForCall = isStubBbox(analysis.boundingBox)
+          ? current.photo
+          : ((await cropToBbox(current.photo, analysis.boundingBox)) ?? current.photo);
         const outcome = await requestGarmentRecon({
           garmentId: id,
           reconClass: analysis.reconClass,
-          photoDataUrl: current.photo,
+          photoDataUrl: photoForCall,
           renderer,
           name: current.name,
           // Additive Phase 2 hooks: queue cancellation + honest progress.

@@ -46,8 +46,13 @@ export const RECON_CACHE_ENABLED = true;
  * Bump when a backend or preprocessing change alters output for identical
  * inputs — it namespaces every key, so old entries simply stop matching
  * instead of being served as if still valid.
+ *
+ * v2 (2026-10-23): the analyzer stopped being the full-frame stub (accuracy
+ * track A3). Same source photo now reaches the renderer as a Gemini-bbox
+ * crop, so a v1 entry (rendered from the full frame) must never be served
+ * for it.
  */
-export const RECON_CACHE_VERSION = 1;
+export const RECON_CACHE_VERSION = 2;
 
 export interface ReconCacheKeyParts {
   /** Preferred: SHA-256 of the prepared image bytes (Phase 1 pipeline). */
