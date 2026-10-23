@@ -23,7 +23,7 @@ import Sheet from "../components/Sheet";
 import { LogoMark } from "../components/icons";
 import { taggingToGarment, withTimeout, type TaggingResult } from "../services/aiStylistService";
 import { startImport, type ImportHandle } from "../services/uploadQueue";
-import { reconClassFor } from "../services/garmentRecon";
+import { reconClassFor, getReconDailyCount, RECON_DAILY_BUDGET } from "../services/garmentRecon";
 import { markStage } from "../lib/telemetry";
 
 type Filter = "all" | Category;
@@ -855,6 +855,12 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
 
   const g = garment;
 
+  // Honest pacing, read once per open (no polling, no new store state): the
+  // free tier renders about 4 pieces a day, and a spent day reads differently
+  // from a not-yet-reconstructed garment. The retry path's own budget check
+  // still explains itself if the wearer taps anyway.
+  const budgetSpent = g ? getReconDailyCount() >= RECON_DAILY_BUDGET : false;
+
   return (
     <Sheet open={!!g} onClose={onClose} title={g?.name}>
       {g && (
@@ -903,7 +909,9 @@ function DetailSheet({ garment, onClose }: { garment: Garment | null; onClose: (
                   ? g.reconError === INTERRUPTED_ERROR
                     ? "Interrupted when the app closed — photo kept. One tap to finish it."
                     : `Reconstruction didn’t run${g.reconError ? ` — ${g.reconError}` : ""} — photo kept. Retry when quota allows.`
-                  : "Rebuild this as a clean standalone garment — free, one-time."}
+                  : budgetSpent
+                    ? "Today’s free renders are used up (about 4 pieces a day). Your photo stays as-is — the rest catch up tomorrow, and re-imports are always free."
+                    : "Rebuild this as a clean standalone garment — free, about 4 pieces a day."}
               </p>
               <button
                 onClick={() => retryRecon(g.id)}

@@ -88,7 +88,7 @@ export default function JobBanner() {
                   </p>
                   <p className="truncate text-[11px] font-bold text-mut">
                     {/* The job's own words. The clock is context, not a guess. */}
-                    {current ? current.stage ?? "Working…" : "Waiting for the queue"}
+                    {current ? current.stage ?? "Working…" : "Waiting for the queue · free tier renders about 4 pieces a day"}
                     {current && (
                       <span className="ml-1.5 tabular-nums opacity-70">
                         {elapsed}s / {RECON_CEILING_S}s
