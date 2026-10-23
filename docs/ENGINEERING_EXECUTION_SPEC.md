@@ -835,6 +835,31 @@ implementer does not have; the repo copy stays until the deletion is done.
   `dist/` tracked = 0, 261 tracked files, `tsc --noEmit` 0 errors, 8 test files
   / 79 tests green.
 
+- KLEIN DETAIL SPIKE — GRADED, AND IT CONFIRMS THE ROUTER (2026-10-23, branch
+  `impl/phases-0-7`). The bounded experiment recorded under `hf-klein/` and
+  `klein-vision-flowie/` ("does FLUX.2-klein preserve difficult garment details
+  that TryOffDiff drops?") ran its two planned calls on 2026-09-23/24
+  (`recon-work/guess-shorts-klein/`, `recon-work/navy-trousers-klein/`) but was
+  never graded — the outputs sat unjudged for a month. Graded now from the
+  committed artifacts, no quota spent:
+  (1) HARD CASE (blue GUESS shorts, repeated side-tape logo): klein kept the
+  tape **present and legible**, TryOffDiff dropped it entirely. Klein wins on
+  detail preservation — this is the case the `hasPrint` router exists for.
+  (2) EASY CASE (plain navy trousers, no graphics): klein **invented** side
+  stripes that do not exist in the source photo; TryOffDiff was faithful.
+  Klein hallucinates detail when there is none.
+  Conclusion: the pre-registered stop rule ("partial-or-worse → stop, no call
+  2") was met on call 1, and call 2's regression check answered the opposite
+  question. The hybrid router (TryOffDiff default, klein only for wearer-set
+  `hasPrint`) is **confirmed as the correct risk-balanced design**, not
+  overturned: klein's detail win is real and so is its invention risk, which is
+  exactly why it must not become the default. The gap the experiment exposes:
+  a printed garment the wearer does *not* manually flag loses its detail
+  through TryOffDiff, because the stub analyzer cannot detect prints
+  (analyzer remains "Qwen3-VL-8B pending"). Closing that gap is accuracy-track
+  work (suggest-and-confirm print hint, then a real analyzer), sequenced so a
+  false positive can never silently route a plain garment to klein.
+
 - PHASE 6 GATE CLOSED — THE FIRST RUN WAS RED, AND IT WAS AN ACTION, NOT THE CODE
   (2026-09-28). Pushing `impl/phases-0-7` made the gate real for the first time.
   `ci.yml` went green in 55s. `android.yml` went red in 25s — and red in the most
