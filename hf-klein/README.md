@@ -51,14 +51,15 @@ HF_TOKEN=hf_...   # same read token (one token, shared pool)
 ## Call it (harness — our stack, max 1–2 calls)
 
 ```bash
+# `references/` is gitignored: point --input at a photo on your own machine.
 # Call 1 (the discriminating test — hard case, GUESS tape):
 node scripts/recon-harness.mjs \
-  --input=references/raw-samples/photo_1_2026-09-08_10-59-52.jpg \
+  --input=references/raw-samples/<guess-shorts>.jpg \
   --slug=guess-shorts --class=lower --out=recon-work/guess-shorts-klein \
   --klein --klein-steps=20 --seed=42
 # Call 2 (ONLY if call 1 shows print promise — easy-case regression check):
 node scripts/recon-harness.mjs \
-  --input=references/raw-samples/photo_2_2026-09-18_07-49-17.jpg \
+  --input=references/raw-samples/<navy-trousers>.jpg \
   --slug=navy-trousers --class=lower --out=recon-work/navy-trousers-klein \
   --klein --klein-steps=20 --seed=42
 ```

@@ -14,7 +14,7 @@
  *
  * Usage:
  *   node scripts/recon-harness.mjs \
- *     --input=references/raw-samples/photo_2_2026-09-18_07-49-17.jpg \
+ *     --input=references/raw-samples/<your-photo>.jpg \
  *     --slug=navy-trousers --class=lower --out=recon-work/navy-trousers
  *   Optional: --bbox=x,y,w,h (1000-scale, default full-frame stub)
  *             --tryoff (call the TryOffDiff Space; needs HF_TRYOFF_SPACE_ID + HF_TOKEN)

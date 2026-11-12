@@ -134,6 +134,9 @@ export async function signIn(email: string, password: string): Promise<AuthResul
   if (!isSupabaseConfigured || !supabase) {
     await wait(650);
     const record = readMockUsers().find((u) => u.email === cleanEmail);
+    /* Mock mode only: credentials live in localStorage on this device and are
+       deliberately plaintext. Never reached when Supabase is configured — the
+       live path below calls supabase.auth.signInWithPassword(). */
     if (!record || record.pass !== password) {
       throw new Error("Incorrect email or password.");
     }

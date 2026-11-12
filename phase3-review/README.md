@@ -64,3 +64,7 @@ plain contrasting surface (NOT white-on-white or black-on-black), garment
 fully inside the frame with a hand's-width margin on all sides (the photo-2
 lesson), lay flat, no hangers, no body parts. Drop them in
 `references/raw-samples/` named `set2-<category>-<n>.jpg`.
+
+`references/` is gitignored — fixtures stay local. The samples used for the
+Phase 3 grid are kept on the maintainer's machine under `_private-archive/`
+because they were personal photos; they are not part of the public repo.

@@ -1,7 +1,9 @@
 # Phase 3 grid inputs — 9 samples, graded
 
-Source photos: `references/raw-samples/` (old photo_2 excluded per owner
-decision). Composites below are the exact files a funded grid run will consume.
+Source photos: `references/raw-samples/` (local-only and gitignored; personal
+fixtures, not part of the public repo — see `_private-archive/` on the
+maintainer's machine). Old photo_2 excluded per owner decision. Composites
+below are the exact files a funded grid run will consume.
 
 | # | file | garment | Phase-1 composite quality (visual) | grid-ready? |
 |---|---|---|---|---|

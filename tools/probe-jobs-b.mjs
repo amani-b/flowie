@@ -107,7 +107,10 @@ const resumedOutcome = resumedId
 
 /* ---- cache survives the reload: same photo, brand-new session, 0 calls -- */
 const before = S.calls.length;
-const buf = await (await fetch("/references/raw-samples/photo_1_2026-09-18_07-49-17.jpg")).arrayBuffer();
+/* `references/` is gitignored, so fixtures are staged here before a run
+   (see probe-jobs-a.mjs). Same filename, so cache keys still line up. */
+const FIXTURE = "/_tmp_photos/photo_1_2026-09-18_07-49-17.jpg";
+const buf = await (await fetch(FIXTURE)).arrayBuffer();
 const file = new File([buf], "photo_1_2026-09-18_07-49-17.jpg", { type: "image/jpeg" });
 await new Promise((resolve, reject) => {
   const to = setTimeout(() => reject(new Error("re-import did not complete")), 60000);

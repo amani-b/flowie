@@ -1,6 +1,7 @@
 {
-  "name": "sandbox-workspace",
+  "name": "flowie-app",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -49,7 +49,9 @@ DECISION = locked. PLANNED = specified, not implemented.
 - `docs/` did not exist at HEAD; `supabase/.temp/` is CLI cache (untracked,
   leave alone). `dist/`, `out/`, `recon-work/`, `*-review/`, `references/`,
   `codex_video_stills/`, `flowie-app-handoff.zip` are tracked build/review
-  artefacts (hygiene backlog, Phase 6).
+  artefacts (hygiene backlog, Phase 6). *(Superseded for `references/` and
+  `codex_video_stills/`: untracked and purged from history for the public
+  release — see the Phase 6 note in §11.)*
 
 ### 1.1 Stack (`package.json`, `vite.config.js`, `tsconfig.json`)
 
@@ -671,6 +673,34 @@ implementer does not have; the repo copy stays until the deletion is done.
   `recon-work/` and `flowie-app-handoff.zip` were already untracked.
   Tracked files after this pair of hygiene commits: 22,106 → 194, and
   `git status` is finally free of modified files.
+
+- PUBLIC RELEASE PREP (2026-11-12). Repo published for portfolio use. Four
+  changes, plus a history rewrite:
+  (1) `references/` and `codex_video_stills/` untracked. The raw samples were
+  personal garment photos (bedroom background) and the stills were frames from
+  a third-party video; both were removed from the tree *and* from all history
+  (`git filter-repo --path references --path codex_video_stills --invert-paths`).
+  The working copies are kept on this machine only, under the now-ignored
+  `_private-archive/`. `references/` is gitignored so local fixtures still
+  work; the harness/probe scripts now point at user-supplied photos instead of
+  the deleted samples.
+  (2) `.env` purged from all history. It had been committed in `62bad88d`
+  (2026-08-20) and deleted in `b7047c27` (2026-08-28), but deletion does not
+  rewrite history, so a live-format `VITE_GEMINI_API_KEY` and the Supabase
+  project URL + anon key were still reachable on every branch. The local `.env`
+  now holds a different Gemini key than the leaked one; **revoking the old key
+  in Google AI Studio is still a manual step** and is required for the purge to
+  mean anything. The anon key is client-side by design and all four tables have
+  RLS enabled (`supabase/schema.sql`), so its exposure is accepted; the project
+  ref is also documented in `HANDOFF.md`.
+  (3) `LICENSE` (MIT) and a root `README.md` added — a public repo with no
+  license defaults to all-rights-reserved, which defeats the purpose.
+  (4) `package.json` renamed `sandbox-workspace` → `flowie-app` and given a
+  matching `license` field.
+  Because the rewrite invalidates every SHA, all branches, tags and the two
+  stashes were force-pushed (stashes dropped). Dangling `cline checkpoint`
+  commits carrying the old `.env` were unreachable from any ref and were
+  pruned by `git gc`; they were never published.
 
 - PHASE 5 EXECUTED (2026-09-27), branch `impl/phases-0-7`. Capacitor 8 wraps the
   same Vite build — no second codebase. **Gate met**: `:app:assembleDebug`

@@ -122,9 +122,11 @@ const resetBudget = () =>
 /* ------------------------------- fixtures -------------------------------- */
 /**
  * Served from `public/_tmp_photos/`, which `.gitignore` already excludes.
- * `references/` is outside Vite's served root, so the raw samples are copied
- * in before a probe run and deleted afterwards — same discipline Phase 1 used,
- * so a staged fixture can never be committed by accident.
+ * `references/` is gitignored (local fixtures only — the shipped samples were
+ * personal photos, untracked for the public release), so copy the raw samples
+ * you need into `public/_tmp_photos/` before a probe run and delete them
+ * afterwards — same discipline Phase 1 used, so a staged fixture can never be
+ * committed by accident.
  */
 const ORIGIN = window.__phase2Origin ?? "";
 const SAMPLE = (n) => `${ORIGIN}/_tmp_photos/photo_${n}_2026-09-18_07-49-17.jpg`;

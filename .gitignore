@@ -69,6 +69,16 @@ htmlcov/
 # Recon harness workdirs (per-garment intermediates, may contain user photos)
 recon-work/
 
+# Local-only test fixtures. The garment photos and third-party reference
+# screenshots that used to live here were untracked for the public release
+# (personal photos + copyrighted material); copies are kept on this machine
+# under _private-archive/. Supply your own photos here to run the harness.
+references/
+
+# Private local archive of files removed from the public repository. Never
+# commit: it holds personal photos and evaluation reference material.
+_private-archive/
+
 # Capacitor live-reload helper. Machine-specific (LAN IP + dev-server URL) and
 # never part of a build — see docs/ENGINEERING_EXECUTION_SPEC.md Phase 5.
 # Gradle/build outputs under android/ are NOT listed here: Capacitor generates
