@@ -1,0 +1,231 @@
+{
+  "ok": true,
+  "failure": null,
+  "abortedBeforeBatch": false,
+  "allMeasuredClaimsPass": true,
+  "claimsMeasured": 3,
+  "claimsExpected": 3,
+  "unmeasured": [],
+  "gateSatisfied": true,
+  "uiResponsive": {
+    "pass": true,
+    "p95FrameMs": 17,
+    "stages": 6
+  },
+  "totalRemoteCalls": 3,
+  "callsByGarment": {
+    "433f13f9": 1,
+    "76ec8e64": 1,
+    "e61d8b8b": 1
+  },
+  "maxRemoteInFlight": 1,
+  "results": [
+    {
+      "test": "0 preconditions",
+      "supabaseConfigured": true,
+      "supabaseClient": true,
+      "garments": 0,
+      "cacheSize": 0,
+      "budgetUsed": 0
+    },
+    {
+      "test": "CLAIM 1a cold import of unseen bytes",
+      "measured": true,
+      "pass": true,
+      "calls": 1,
+      "expect": 1,
+      "windowCalls": 1,
+      "status": "ready",
+      "hasRecon": true,
+      "sha": "079ed48eb39c7e7b",
+      "cacheSize": 1,
+      "category": "top",
+      "reconClass": "upper",
+      "renderer": "tryoff",
+      "cacheMissProvenBy": "a call was made for these bytes in this run",
+      "job": {
+        "id": "433f13f9",
+        "calls": 1,
+        "status": "ready",
+        "reconUrl": "set",
+        "renderer": "tryoff",
+        "observedLiveMs": 752,
+        "category": "top",
+        "reconClass": "upper",
+        "photoSha256": "079ed48eb39c7e7b",
+        "finalMirrorStatus": "ready",
+        "finalMirrorStage": "Done"
+      }
+    },
+    {
+      "test": "CLAIM 1b identical re-import (same file, different garment)",
+      "measured": true,
+      "pass": true,
+      "calls": 0,
+      "expect": 0,
+      "windowCalls": 0,
+      "newGarmentId": true,
+      "shaMatchesCold": true,
+      "sameRenderAsCold": true,
+      "status": "ready",
+      "cacheSize": 1,
+      "cacheHitProvenBy": "0 calls + byte-identical render + ready status",
+      "category": "top",
+      "reconClass": "upper",
+      "renderer": "tryoff",
+      "job": {
+        "id": "43306770",
+        "calls": 0,
+        "status": "ready",
+        "reconUrl": "set",
+        "renderer": "tryoff",
+        "observedLiveMs": 40,
+        "category": "top",
+        "reconClass": "upper",
+        "photoSha256": "079ed48eb39c7e7b",
+        "finalMirrorStatus": "ready",
+        "finalMirrorStage": "Done"
+      }
+    },
+    {
+      "test": "CLAIM 3 two unseen photos enqueued back to back",
+      "measured": true,
+      "pass": true,
+      "calls": 2,
+      "expect": 2,
+      "perGarmentCalls": {
+        "76ec8e64": 1,
+        "e61d8b8b": 1
+      },
+      "windowCalls": 2,
+      "peakConcurrentRemoteCalls": 1,
+      "expectPeak": 1,
+      "peakComputedFromEndedCalls": 2,
+      "inFlightAtSample": 0,
+      "nonOverlapping": true,
+      "allReady": true,
+      "order": [
+        "76ec8e64",
+        "e61d8b8b"
+      ],
+      "renderers": [
+        "tryoff"
+      ],
+      "classes": [
+        "upper",
+        "upper"
+      ],
+      "sawSerial": true,
+      "observedWhileBusy": {
+        "at": 12588,
+        "running": [
+          {
+            "id": "76ec8e64",
+            "stage": "Uploading photo…"
+          }
+        ],
+        "queued": [
+          "e61d8b8b"
+        ],
+        "activeIdsRunningPlusQueued": 2,
+        "queueDepth": 1,
+        "mirrorRunning": 1,
+        "mirrorQueued": 1
+      },
+      "batchWatch": {
+        "sawActive": [
+          "76ec8e64",
+          "e61d8b8b"
+        ],
+        "neverSeenActive": [],
+        "waitedMs": 1224
+      },
+      "maxRunningSeen": 1,
+      "maxQueuedSeen": 1,
+      "queuedSnapshot": {
+        "queued": [
+          "e61d8b8b"
+        ],
+        "running": [
+          {
+            "id": "76ec8e64",
+            "stage": "Uploading photo…"
+          }
+        ],
+        "mirrorDepth": 1,
+        "queueDepth": 1
+      },
+      "jobs": [
+        {
+          "id": "76ec8e64",
+          "calls": 1,
+          "status": "ready",
+          "reconUrl": "set",
+          "renderer": "tryoff",
+          "category": "top"
+        },
+        {
+          "id": "e61d8b8b",
+          "calls": 1,
+          "status": "ready",
+          "reconUrl": "set",
+          "renderer": "tryoff",
+          "category": "top"
+        }
+      ]
+    },
+    {
+      "test": "CLAIM 3c UI stays responsive during the serial batch",
+      "gate": false,
+      "note": "informational — evidence for the gate, not one of the three gate claims",
+      "pass": true,
+      "frames": 267,
+      "p95FrameMs": 17,
+      "maxFrameMs": 33,
+      "stageTransitions": 6,
+      "stages": [
+        "Waiting…",
+        "Starting…",
+        "Checking for a cached render…",
+        "Checking today's budget…",
+        "Uploading photo…",
+        "Done"
+      ],
+      "stageEventCount": 12,
+      "pageVisibility": "visible"
+    },
+    {
+      "test": "CLAIM 4 job projection (what the banner renders)",
+      "gate": false,
+      "pass": true,
+      "measured": true,
+      "noLiveJobs": true,
+      "bannerIdle": true,
+      "busyJobs": [],
+      "mirrorNow": [
+        {
+          "id": "433f13f9",
+          "status": "ready",
+          "stage": "Done"
+        },
+        {
+          "id": "43306770",
+          "status": "ready",
+          "stage": "Done"
+        },
+        {
+          "id": "76ec8e64",
+          "status": "ready",
+          "stage": "Done"
+        },
+        {
+          "id": "e61d8b8b",
+          "status": "ready",
+          "stage": "Done"
+        }
+      ],
+      "activeJobCount": 0,
+      "queueDepth": 0
+    }
+  ]
+}

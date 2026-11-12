@@ -55,6 +55,14 @@ export interface Database {
           id: string;
           user_id: string;
           image_url: string | null;
+          /** Cached studio rendering (data URL). Added by migration_render_url.sql; absent until applied. */
+          render_url?: string | null;
+          /** Reconstruction final (data URL). Added by migration_recon_url.sql; absent until applied. */
+          recon_url?: string | null;
+          /** Wearer-set print flag (Klein detail routing). Added by migration_has_print.sql; absent until applied. */
+          has_print?: boolean | null;
+          /** RETIRED (old pipeline): Phase 4 img2img final URL. No longer written; kept optional so old rows still parse. */
+          studio_render_url?: string | null;
           category: string;
           color: string;
           colors: string[]; // Array of hex values, ordered by prominence
@@ -71,6 +79,10 @@ export interface Database {
           id?: string;
           user_id: string;
           image_url?: string | null;
+          render_url?: string | null;
+          recon_url?: string | null;
+          has_print?: boolean | null;
+          studio_render_url?: string | null;
           category: string;
           color: string;
           colors?: string[]; // Array of hex values
@@ -87,6 +99,10 @@ export interface Database {
           id?: string;
           user_id?: string;
           image_url?: string | null;
+          render_url?: string | null;
+          recon_url?: string | null;
+          has_print?: boolean | null;
+          studio_render_url?: string | null;
           category?: string;
           color?: string;
           colors?: string[];

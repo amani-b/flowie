@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, type PanInfo } from "framer-motion";
 import { X } from "lucide-react";
+import { pushOverlay } from "../lib/overlayStack";
 
 /**
  * Frosted bottom sheet with drag-to-dismiss. The workhorse overlay
@@ -20,6 +21,23 @@ export default function Sheet({
   const handleDragEnd = (_: unknown, info: PanInfo) => {
     if (info.offset.y > 110 || info.velocity.y > 600) onClose();
   };
+
+  /**
+   * Announce this sheet to the overlay registry while it is open, so the
+   * Android back button can dismiss it (see lib/overlayStack.ts). `onClose` is
+   * held in a ref and the effect depends only on `open`: screens pass inline
+   * arrows, so a changing `onClose` identity would otherwise re-register on
+   * every render and churn the stack.
+   */
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    return pushOverlay(() => onCloseRef.current());
+  }, [open]);
 
   return (
     <AnimatePresence>
@@ -58,7 +76,7 @@ export default function Sheet({
               <span className="h-1.5 w-11 rounded-full bg-linestrong" />
             </div>
             <div className="flex items-center justify-between px-5 pt-3">
-              <h2 className="font-display text-[18px] font-extrabold tracking-tight">
+              <h2 className="text-[18px] font-extrabold tracking-tight">
                 {title}
               </h2>
               <button

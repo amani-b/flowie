@@ -11,6 +11,15 @@ import type {
   SavedLook,
   Warmth,
 } from "../types";
+import { ensureRendering } from "./studioRender";
+
+// Set false for the session the first time the live DB rejects `render_url`
+// (migration not applied yet) — writes then omit it instead of failing.
+let renderUrlOk = true;
+// Same guard for the `recon_url` column (migration_recon_url.sql).
+let reconUrlOk = true;
+// Same guard for the `has_print` flag (migration_has_print.sql).
+let hasPrintOk = true;
 
 /**
  * Cloud sync layer (Supabase). Every call is a no-op when `supabase` is
@@ -39,18 +48,24 @@ const clampFormality = (n: number): Formality =>
  * Upload a garment photo to Supabase Storage (wardrobe bucket).
  * Returns the public URL for storage in wardrobe_items.image_url.
  * Only used in live mode (isSupabaseConfigured === true).
+ *
+ * Accepts a Blob or a data URL. A Blob is passed straight to the storage
+ * client: the old path always went through `fetch(dataUrl).blob()`, which
+ * decoded a multi-megabyte base64 string just to recover the bytes the
+ * caller had handed us in the first place.
  */
 async function uploadGarmentPhoto(
   userId: string,
   garmentId: string,
-  dataUrl: string
+  image: Blob | string
 ): Promise<string> {
   if (!supabase) {
     throw new Error("Supabase not configured");
   }
 
-  // Convert base64 data URL to Blob
-  const blob = await fetch(dataUrl).then((r) => r.blob());
+  // Only a data URL needs materialising; a Blob is already bytes.
+  const blob =
+    typeof image === "string" ? await fetch(image).then((r) => r.blob()) : image;
 
   // Path format: userId/garmentId.jpg - first segment must be userId for RLS
   const path = `${userId}/${garmentId}.jpg`;
@@ -92,7 +107,16 @@ function rowToGarment(r: WardrobeRow): Garment {
   const pattern: Garment["pattern"] = validPatterns.includes(r.pattern as any)
     ? (r.pattern as Garment["pattern"])
     : "solid";
-  return {
+  // The cached studio rendering travels with the record when the column
+  // exists (see migration_render_url.sql); otherwise it is re-derived
+  // deterministically from the same fields — never fetched per visit.
+  const stored = (r as { render_url?: string | null }).render_url ?? undefined;
+  // The reconstruction final travels the same way (migration_recon_url.sql).
+  // The retired studio_render_url (FLUX re-light) is ignored even when a
+  // legacy row still carries it — recon is the single source of truth.
+  const storedRecon =
+    (r as { recon_url?: string | null }).recon_url ?? undefined;
+  const base: Garment = {
     id: r.id,
     name: r.name,
     category,
@@ -108,6 +132,21 @@ function rowToGarment(r: WardrobeRow): Garment {
     photo: r.image_url ?? undefined,
     createdAt: new Date(r.created_at).getTime(),
   };
+  if (storedRecon) {
+    base.reconUrl = storedRecon;
+    base.reconStatus = "ready";
+  }
+  // Wearer-set renderer signal (migration_has_print.sql). Absent on
+  // pre-migration rows → undefined → default TryOffDiff routing.
+  if ((r as { has_print?: boolean | null }).has_print) {
+    base.hasPrint = true;
+  }
+  if (stored) {
+    base.rendering = stored;
+    base.renderStatus = "ready";
+    return base;
+  }
+  return ensureRendering(base);
 }
 
 function garmentToInsert(userId: string, g: Garment): WardrobeInsert {
@@ -116,6 +155,14 @@ function garmentToInsert(userId: string, g: Garment): WardrobeInsert {
     id: g.id, // Always use the same id for storage and DB row
     user_id: userId,
     image_url: g.photo ?? null,
+    // Cached studio rendering lives on the record next to the photo.
+    // Omitted when the live DB predates the render_url migration.
+    ...(renderUrlOk ? { render_url: g.rendering ?? null } : {}),
+    // Reconstruction final — omitted until migration_recon_url.sql.
+    // (studio_render_url from the retired FLUX pipeline is never written.)
+    ...(reconUrlOk ? { recon_url: g.reconUrl ?? null } : {}),
+    // Print flag (renderer signal) — omitted until migration_has_print.sql.
+    ...(hasPrintOk ? { has_print: g.hasPrint ?? false } : {}),
     category: g.category,
     color: g.color,
     colors: g.colors, // New field: array of hex values
@@ -269,14 +316,33 @@ export async function insertGarmentRow(
     }
   }
 
-  const { data, error } = await supabase
+  const payload = {
+    ...garmentToInsert(userId, g),
+    image_url: imageUrl,
+  };
+  let { data, error } = await supabase
     .from("wardrobe_items")
-    .upsert({
-      ...garmentToInsert(userId, g),
-      image_url: imageUrl,
-    }, { onConflict: "id" })
+    .upsert(payload, { onConflict: "id" })
     .select("id")
     .single();
+  if (error && /render_url|recon_url|has_print/.test(error.message) && (renderUrlOk || reconUrlOk || hasPrintOk)) {
+    // Live DB predates render_url / recon_url / has_print migrations — retry
+    // without them once and stop sending them for the rest of the session.
+    // All are re-derivable (SVG on-device / recon retry / flag default), so nothing lost.
+    renderUrlOk = false;
+    reconUrlOk = false;
+    hasPrintOk = false;
+    const { render_url: _dropped, recon_url: _dropped2, has_print: _dropped3, ...legacy } =
+      payload as Record<string, unknown>;
+    void _dropped;
+    void _dropped2;
+    void _dropped3;
+    ({ data, error } = await supabase
+      .from("wardrobe_items")
+      .upsert(legacy, { onConflict: "id" })
+      .select("id")
+      .single());
+  }
   if (error) throw new Error(error.message);
   return (data as { id: string } | null)?.id ?? null;
 }

@@ -1,0 +1,18 @@
+{
+  "device": "R5CX2328T5A",
+  "passed": 11,
+  "failed": 0,
+  "results": [
+    {"name":"reached the app shell (demo sign-in)","pass":true,"detail":{}},
+    {"name":"baseline: Today tab, nothing open","pass":true,"detail":{"drawer":false,"sheet":false,"tab":"home","toast":""}},
+    {"name":"drawer opens from the settings button","pass":true,"detail":{"drawer":true,"sheet":false,"tab":"home","toast":""}},
+    {"name":"BACK closes the drawer","pass":true,"detail":{"drawer":false,"sheet":false,"tab":"home","toast":""}},
+    {"name":"sheet opens from the location chip","pass":true,"detail":{"drawer":false,"sheet":true,"tab":"home","toast":""}},
+    {"name":"BACK closes the sheet","pass":true,"detail":{"drawer":false,"sheet":false,"tab":"home","toast":""}},
+    {"name":"switched to the Closet tab","pass":true,"detail":{"drawer":false,"sheet":false,"tab":"closet","toast":""}},
+    {"name":"BACK returns to Today","pass":true,"detail":{"drawer":false,"sheet":false,"tab":"home","toast":""}},
+    {"name":"baseline for exit: Today, nothing open","pass":true,"detail":{"drawer":false,"sheet":false,"tab":"home","toast":""}},
+    {"name":"first BACK warns instead of exiting","pass":true,"detail":{"drawer":false,"sheet":false,"tab":"home","toast":"Press back again to exit"}},
+    {"name":"double-tap BACK exits to the launcher","pass":true,"detail":{"foregroundBefore":"app.flowie/.MainActivity","foregroundAfter":"com.sec.android.app.launcher/.activities.LauncherActivity"}}
+  ]
+}

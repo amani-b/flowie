@@ -25,6 +25,22 @@ export function pick<T>(arr: T[]): T {
 
 export const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/**
+ * Race any promise against a timeout that REJECTS — guarantees no caller
+ * can pend forever on a network call or callback that never fires.
+ * Rejections flow into existing fallbacks/retries; hangs used to freeze
+ * spinners (upload tagging) or strand background sync for good.
+ */
+export function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out`)), ms);
+  });
+  return Promise.race([p, guard]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
+}
+
 /* ----------------------------- colors ----------------------------- */
 
 const DEFAULT_HEX = "#6B7280";
@@ -164,46 +180,68 @@ export function timeAgo(ts: number): string {
 export function compressImage(
   file: File,
   maxSide = 1024,
-  maxBytes = 1_000_000
+  maxBytes = 1_000_000,
+  timeoutMs = 30_000
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      URL.revokeObjectURL(url);
+      fn();
+    };
+    // Decode-guard: some files (HEIC/corrupt) fire neither onload nor
+    // onerror — without this the promise pends forever and any upload
+    // loop awaiting it spins its spinner for eternity.
+    const timer = setTimeout(
+      () => done(() => reject(new Error("Timed out reading that image"))),
+      timeoutMs
+    );
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      URL.revokeObjectURL(url);
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        reject(new Error("Canvas unavailable"));
-        return;
-      }
-      let scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-      let quality = 0.85;
-      const step = () => {
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-        // Flatten onto white first: JPEG has no alpha channel, and an
-        // untouched canvas defaults transparent pixels to black. Without
-        // this, a cutout garment photo (transparent PNG background) bakes
-        // in a black backdrop that later throws off color/pattern detection.
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const out = canvas.toDataURL("image/jpeg", quality);
-        const approxBytes = out.length * 0.75;
-        if (approxBytes > maxBytes && (quality > 0.5 || scale > 0.35)) {
-          if (quality > 0.5) quality -= 0.12;
-          else scale *= 0.78;
-          step();
-        } else {
-          resolve(out);
+      done(() => {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Canvas unavailable"));
+          return;
         }
-      };
-      step();
+        let scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        let quality = 0.85;
+        const step = (): void => {
+          // toDataURL can throw (tainted/huge canvas) — a throw escaping
+          // here used to leave the promise permanently pending.
+          try {
+            canvas.width = Math.max(1, Math.round(img.width * scale));
+            canvas.height = Math.max(1, Math.round(img.height * scale));
+            // Flatten onto white first: JPEG has no alpha channel, and an
+            // untouched canvas defaults transparent pixels to black. Without
+            // this, a cutout garment photo (transparent PNG background) bakes
+            // in a black backdrop that later throws off color/pattern detection.
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const out = canvas.toDataURL("image/jpeg", quality);
+            const approxBytes = out.length * 0.75;
+            if (approxBytes > maxBytes && (quality > 0.5 || scale > 0.35)) {
+              if (quality > 0.5) quality -= 0.12;
+              else scale *= 0.78;
+              step();
+            } else {
+              resolve(out);
+            }
+          } catch (e) {
+            reject(e instanceof Error ? e : new Error("Could not compress image"));
+          }
+        };
+        step();
+      });
     };
     img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Could not read that image"));
+      done(() => reject(new Error("Could not read that image")));
     };
     img.src = url;
   });

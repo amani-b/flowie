@@ -2,10 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- `maximum-scale=1` was removed in Phase 4: it blocks pinch zoom, which
+         is a WCAG 1.4.4 failure and a genuine problem for anyone who needs to
+         enlarge garment photos or care labels. The app is a normal scrolling
+         document; nothing here depends on the scale being pinned. -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
+    <meta name="color-scheme" content="dark light" />
     <meta name="description" content="Flowie — a smart closet, daily stylist and outfit visualizer that dresses you for the actual weather." />
     <meta name="theme-color" content="#0C110D" />
     <meta name="apple-mobile-web-app-capable" content="yes" />

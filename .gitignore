@@ -1,4 +1,3 @@
-```
 # Dependencies
 node_modules/
 
@@ -6,6 +5,7 @@ node_modules/
 dist/
 build/
 target/
+out/
 
 # Logs and temp files
 *.log
@@ -23,6 +23,10 @@ target/
 # Python cache
 __pycache__/
 *.pyc
+
+# Local scratch assets for on-device probes (staged test photos, etc).
+# Never part of a build; see docs/ENGINEERING_EXECUTION_SPEC.md §9.
+public/_tmp_photos/
 *.pyo
 *.pyd
 
@@ -61,4 +65,38 @@ htmlcov/
 
 # MyPy cache
 .mypy_cache/
-```
+
+# Recon harness workdirs (per-garment intermediates, may contain user photos)
+recon-work/
+
+# Local-only test fixtures. The garment photos and third-party reference
+# screenshots that used to live here were untracked for the public release
+# (personal photos + copyrighted material); copies are kept on this machine
+# under _private-archive/. Supply your own photos here to run the harness.
+references/
+
+# Private local archive of files removed from the public repository. Never
+# commit: it holds personal photos and evaluation reference material.
+_private-archive/
+
+# Capacitor live-reload helper. Machine-specific (LAN IP + dev-server URL) and
+# never part of a build — see docs/ENGINEERING_EXECUTION_SPEC.md Phase 5.
+# Gradle/build outputs under android/ are NOT listed here: Capacitor generates
+# android/.gitignore with the platform and it already covers them.
+scripts/capacitor.live-reload.mjs
+
+# Local scratch at the repo root: probe outputs, dev-server launchers and review
+# screenshots. Machine-specific or regenerable, never part of a build. Kept on
+# disk (several are evidence) but kept out of `git status`, so the
+# tree-stays-clean assertion in .github/workflows/ci.yml is verifiable on this
+# machine and not only on the runner. `probe-gate.json` is deliberately NOT
+# listed — it is committed evidence produced by tools/probe-gate.mjs via
+# run-probe.cmd, and an ignore rule would not apply to a tracked path anyway.
+/.workbuddy-ai/
+/t.txt
+/probe-a.json
+/run-probe.cmd
+/run-vite.cmd
+/phase2-00-app.png
+/phase2-live.png
+

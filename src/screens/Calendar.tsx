@@ -2,6 +2,11 @@ import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Calendar, ChevronLeft, ChevronRight, Clock, Trash2 } from "lucide-react";
 import { useAppStore } from "../store/appStore";
+import {
+  useLooks,
+  useScheduleDateKeys,
+  useScheduleMap,
+} from "../store/selectors";
 import { cn, timeAgo } from "../lib/utils";
 import type { SavedLook } from "../types";
 import OutfitBoard from "../components/OutfitBoard";
@@ -122,7 +127,7 @@ function ScheduleSheet({
                 >
                   <OutfitBoard outfit={look.outfit} compact staticBoard />
                   <p className="mt-1 truncate text-[11px] font-extrabold">{look.name}</p>
-                  <p className="text-[9px] font-bold text-mut">
+                  <p className="text-[11px] font-bold text-mut">
                     {OCCASION_META[look.occasion].label}
                   </p>
                 </button>
@@ -175,8 +180,6 @@ function groupSchedulesByMonth(schedules: Array<{ date: Date; look: SavedLook }>
 }
 
 export default function CalendarView() {
-  const looks = useAppStore((s) => s.looks);
-  const schedules = useAppStore((s) => s.schedules);
   const scheduleLook = useAppStore((s) => s.scheduleLook);
   const clearSchedule = useAppStore((s) => s.clearSchedule);
   const setTab = useAppStore((s) => s.setTab);
@@ -190,17 +193,27 @@ export default function CalendarView() {
   const monthDates = getMonthDates(new Date(new Date().setMonth(new Date().getMonth() + monthOffset)));
   const today = formatDateKey(new Date());
 
-  // Build a map of date -> look for quick lookup
-  const scheduleMap = useMemo(() => {
-    const map = new Map<string, SavedLook>();
-    schedules.forEach((sch) => {
-      const look = looks.find((l) => l.id === sch.outfitId);
-      if (look) map.set(sch.scheduledDate, look);
-    });
-    return map;
-  }, [schedules, looks]);
+  /**
+   * date key -> look ID, derived inside the store selector.
+   *
+   * This replaces a `useMemo` over two whole-array subscriptions
+   * (`s.looks`, `s.schedules`), which re-derived and re-rendered the entire
+   * calendar on ANY look mutation anywhere in the app. The selector compares
+   * by value, so a store write that does not change which look sits on which
+   * day is a no-op.
+   */
+  const scheduleMap = useScheduleMap();
 
-  const getLookForDate = (dateKey: string) => scheduleMap.get(dateKey) || null;
+  // Records by id, for resolving the IDs the selectors hand back. `useLooks`
+  // shallow-compares by element reference, so this only changes when a look
+  // record itself is replaced.
+  const looks = useLooks();
+  const looksById = useMemo(() => new Map(looks.map((l) => [l.id, l])), [looks]);
+
+  const getLookForDate = (dateKey: string) => {
+    const id = scheduleMap[dateKey];
+    return (id ? looksById.get(id) : null) ?? null;
+  };
 
   const handleAssign = (dateKey: string, lookId: string) => {
     scheduleLook(dateKey, lookId);
@@ -210,23 +223,29 @@ export default function CalendarView() {
     clearSchedule(dateKey);
   };
 
-  // History: past schedules only (today or earlier), reverse chronological
+  // Every scheduled day key, newest first — a list of primitives, so an
+  // unrelated mutation cannot invalidate it.
+  const scheduleDateKeys = useScheduleDateKeys();
+  const bookedDays = useMemo(() => new Set(scheduleDateKeys), [scheduleDateKeys]);
+
+  // History: past schedules only (today or earlier), reverse chronological.
+  // Derived from the primitive day keys + the id map, so it too is memo-stable
+  // against unrelated store writes.
   const historyItems = useMemo(() => {
     const now = new Date();
     now.setHours(23, 59, 59, 999); // Include today
     const items: Array<{ date: Date; look: SavedLook }> = [];
-    schedules.forEach((sch) => {
-      const schDate = new Date(sch.scheduledDate);
-      if (schDate <= now) {
-        const look = looks.find((l) => l.id === sch.outfitId);
-        if (look) items.push({ date: schDate, look });
-      }
-    });
+    for (const key of scheduleDateKeys) {
+      const schDate = new Date(key);
+      if (schDate > now) continue;
+      const look = looksById.get(scheduleMap[key] ?? "");
+      if (look) items.push({ date: schDate, look });
+    }
     items.sort((a, b) => b.date.getTime() - a.date.getTime());
     return groupSchedulesByMonth(items);
-  }, [schedules, looks]);
+  }, [scheduleDateKeys, scheduleMap, looksById]);
 
-  const hasAnySchedules = schedules.length > 0;
+  const hasAnySchedules = scheduleDateKeys.length > 0;
 
   return (
     <div className="px-4 pb-44 pt-4">
@@ -245,13 +264,18 @@ export default function CalendarView() {
       </header>
 
       {/* View mode toggle */}
-      <div className="mt-4 flex rounded-[14px] border border-line bg-bgdeep p-1">
+      <div
+        role="group"
+        aria-label="Calendar view"
+        className="mt-4 flex rounded-[14px] border border-line bg-bgdeep p-1"
+      >
         {(["week", "month", "history"] as CalendarViewMode[]).map((mode) => {
           const active = viewMode === mode;
           return (
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
+              aria-pressed={active}
               className={cn(
                 "flex flex-1 items-center justify-center rounded-[10px] px-3 py-2 text-[12.5px] font-extrabold transition-all",
                 active ? "bg-card text-ink shadow-sm" : "text-mut hover:text-ink"
@@ -310,7 +334,7 @@ export default function CalendarView() {
                 >
                   <span
                     className={cn(
-                      "text-[9px] font-extrabold",
+                      "text-[11px] font-extrabold",
                       isToday ? "text-acc" : "text-mut"
                     )}
                   >
@@ -367,7 +391,7 @@ export default function CalendarView() {
           {/* Month grid header */}
           <div className="mt-4 grid grid-cols-7 gap-1">
             {DAY_NAMES.map((name) => (
-              <div key={name} className="text-center text-[9px] font-extrabold text-mut">
+              <div key={name} className="text-center text-[11px] font-extrabold text-mut">
                 {name}
               </div>
             ))}
@@ -396,7 +420,7 @@ export default function CalendarView() {
                 >
                   <span
                     className={cn(
-                      "text-[10px] font-extrabold",
+                      "text-[11px] font-extrabold",
                       isToday ? "text-acc" : isInMonth ? "text-ink" : "text-mut"
                     )}
                   >
@@ -436,7 +460,7 @@ export default function CalendarView() {
                       className="card flex items-center gap-3 rounded-[16px] p-2.5"
                     >
                       <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-[10px] bg-accsoft">
-                        <span className="text-[9px] font-extrabold text-acc">
+                        <span className="text-[11px] font-extrabold text-acc">
                           {DAY_NAMES[date.getDay() === 0 ? 6 : date.getDay() - 1]}
                         </span>
                         <span className="text-[13px] font-extrabold text-acc">
@@ -445,7 +469,7 @@ export default function CalendarView() {
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[12.5px] font-extrabold">{look.name}</p>
-                        <p className="text-[10px] font-bold text-mut">
+                        <p className="text-[11px] font-bold text-mut">
                           {OCCASION_META[look.occasion].label}
                         </p>
                       </div>
@@ -467,8 +491,8 @@ export default function CalendarView() {
           <div className="mb-2.5 flex items-center justify-between px-1">
             <p className="label-micro">This week's lineup</p>
             {hasAnySchedules && (
-              <span className="text-[10px] font-extrabold text-mut">
-                {weekDates.filter((d) => scheduleMap.has(formatDateKey(d))).length} / 7 days planned
+              <span className="text-[11px] font-extrabold text-mut">
+                {weekDates.filter((d) => bookedDays.has(formatDateKey(d))).length} / 7 days planned
               </span>
             )}
           </div>
@@ -501,7 +525,7 @@ export default function CalendarView() {
                     className="card flex items-center gap-3 rounded-[16px] p-2.5"
                   >
                     <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-[10px] bg-accsoft">
-                      <span className="text-[9px] font-extrabold text-acc">
+                      <span className="text-[11px] font-extrabold text-acc">
                         {DAY_NAMES[d.getDay() === 0 ? 6 : d.getDay() - 1]}
                       </span>
                       <span className="text-[13px] font-extrabold text-acc">
@@ -510,7 +534,7 @@ export default function CalendarView() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[12.5px] font-extrabold">{look.name}</p>
-                      <p className="text-[10px] font-bold text-mut">
+                      <p className="text-[11px] font-bold text-mut">
                         {OCCASION_META[look.occasion].label}
                       </p>
                     </div>

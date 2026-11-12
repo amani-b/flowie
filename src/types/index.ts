@@ -37,7 +37,47 @@ export interface Garment {
   warmth: Warmth;
   formality: Formality;
   kind?: AccessoryKind; // only for accessories
-  photo?: string; // compressed data-URL (max ~1MB)
+  photo?: string; // compressed data-URL (max ~1MB) — source only, never displayed as the finished look
+  /**
+   * Base64 SHA-256 of the prepared image bytes (from the import pipeline's
+   * worker — `PreparedImage.sha256`). Identity for the content-addressed recon
+   * cache (`services/reconCache.ts`), so re-importing identical bytes reuses
+   * the render instead of spending another remote call. Local-only, not synced.
+   */
+  photoSha256?: string;
+  /**
+   * Reconstruction final (PNG data URL, 512×512): the complete empty
+   * garment rebuilt from the original photo by the recon pipeline
+   * (see services/garmentRecon.ts) — the single source of truth for
+   * garment rendering. Built ONCE per garment at import time via the
+   * recon-garment Edge Function (TryOffDiff Space, class-locked, seed 42).
+   * Display precedence in GarmentPhoto: reconUrl > SVG `rendering`
+   * skeleton. Local-only until synced, like `photo`.
+   */
+  reconUrl?: string;
+  /** Reconstruction build state — independent of the SVG skeleton state. */
+  reconStatus?: "pending" | "ready" | "failed";
+  /** Human-readable failure reason for the last recon attempt. */
+  reconError?: string;
+  /**
+   * User-set: this garment carries logos, graphics, or legible text.
+   * Routes reconstruction to the detail renderer (FLUX.2-klein, ~60 s)
+   * instead of the default TryOffDiff (~30 s), which drops micro-graphics
+   * (verified: GUESS side tape omitted). Default/unset = plain → TryOffDiff.
+   * No auto-detection: the stub analyzer cannot see prints, so the wearer
+   * decides. Toggling clears any cached recon so the other renderer runs.
+   */
+  hasPrint?: boolean;
+  /** Which backend built the cached reconUrl — recorded at success time. */
+  reconRenderer?: "tryoff" | "klein";
+  /**
+   * Cached studio rendering (SVG data URL): the single display image for
+   * this garment on every screen. Generated once via studioRender and stored
+   * on the record — never recomputed per screen visit.
+   */
+  rendering?: string;
+  /** ready = cached rendering loads; pending = still generating; failed = needs retry. */
+  renderStatus?: "pending" | "ready" | "failed";
   createdAt: number;
   syncStatus?: "synced" | "pending" | "error";
 }

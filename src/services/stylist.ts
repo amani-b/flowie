@@ -333,6 +333,9 @@ async function viaGemini(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // Same defect class as the tagging path: no default fetch timeout,
+      // so a stalled connection left generation stuck on "working" forever.
+      signal: AbortSignal.timeout(25_000),
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.8, responseMimeType: "application/json" },

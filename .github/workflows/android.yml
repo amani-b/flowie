@@ -1,0 +1,195 @@
+name: Android
+
+# Builds the debug APK from a clean checkout. This is Phase 6's second workflow
+# and the one that turns the Phase 5 lessons from prose into enforcement:
+#
+#   - JDK 21 is pinned explicitly. On the author's machine PATH `java` is Java 8
+#     and every Gradle call must override JAVA_HOME (§9, Phase 5 lesson 1). CI
+#     gets the same guarantee by installing the JDK and letting setup-java set
+#     JAVA_HOME, rather than trusting whatever the image ships.
+#   - `:app:assembleDebug`, never a bare `assembleDebug` (§9, Phase 5 lesson 3).
+#     A bare task name matches every module, so the library modules build AARs
+#     and drag in `extractDebugAnnotations` plus four lint/compiler jars the app
+#     never needs. The app consumes their classes, not their AARs.
+#   - The merged permission set is asserted, not eyeballed (carry-forward 2,
+#     evidence in docs/phase5/merged-permissions.txt).
+
+on:
+  push:
+    branches: [main, "impl/**"]
+    paths:
+      - "android/**"
+      - "src/**"
+      - "public/**"
+      - "index.html"
+      - "package.json"
+      - "package-lock.json"
+      - "capacitor.config.ts"
+      - "vite.config.js"
+      - "tsconfig.json"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - "src/**"
+      - "public/**"
+      - "index.html"
+      - "package.json"
+      - "package-lock.json"
+      - "capacitor.config.ts"
+      - "vite.config.js"
+      - "tsconfig.json"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: debug APK
+    runs-on: ubuntu-latest
+    # A cold Gradle build with a wrapper download is minutes, not seconds, but
+    # it is not unbounded — cap it so a wedged daemon cannot burn the budget.
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # JDK 21 — matches the local Adoptium 21.0.11.10. `cache: gradle` reuses
+      # the wrapper distribution and dependency cache across runs.
+      #
+      # v5, not v4: v4 is a Node 20 action, and GitHub no longer ships Node 20,
+      # so it is force-run on Node 24 — and GitHub has announced v4 will receive
+      # no further updates. It still worked on the first run, which is exactly
+      # why it is worth bumping now rather than after it stops working.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      # v4, not v3 — and this one is not cosmetic. v3 declares `using: node20`;
+      # GitHub has removed Node 20 from the runners, so v3 is force-run on
+      # Node 24 and fails immediately. That is what made the first run of this
+      # workflow red: step 5 failed in ~20s and every step below it was skipped,
+      # so nothing in this file had ever actually executed. v4.0.4 declares
+      # `using: node24` — checked in the action's own action.yml, not assumed.
+      - uses: android-actions/setup-android@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `cap sync` copies dist/ into android/app/src/main/assets/public (which is
+      # gitignored by android/.gitignore) and re-registers the native plugins, so
+      # the web build must exist first.
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Sync Capacitor into the Android project
+        run: npx cap sync android
+
+      - name: Assemble debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      # The JVM unit-test source set and the instrumented source set both
+      # compile here. Neither can RUN on this runner — instrumented tests need a
+      # device or emulator, and the project deliberately installs neither — but
+      # compiling them is what stops the moved `ExampleUnitTest` /
+      # `ExampleInstrumentedTest` (now under `java/app/flowie/`) from rotting
+      # unnoticed after the package move in Phase 6.
+      - name: Compile and run the JVM unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+      # Note the quoted step name — an unquoted `: ` inside a YAML plain scalar
+      # is a parse error, and a workflow that fails to parse never runs at all.
+      - name: "Compile the instrumented tests (not run — no device in CI)"
+        working-directory: android
+        run: ./gradlew :app:assembleDebugAndroidTest --no-daemon
+
+      # Carry-forward 2, now enforced. The source manifest declares INTERNET
+      # only; VIBRATE arrives from :capacitor-haptics via the manifest merger and
+      # DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION is auto-injected by AndroidX.
+      # Both are expected. A camera/storage/location permission is not — the
+      # import path uses the system photo picker, which needs no permission, and
+      # a plugin that dragged one in would change the Play listing.
+      - name: Assert the merged permission set
+        working-directory: android
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          if [ ! -f "$APK" ]; then
+            echo "::error::No APK at $APK"
+            exit 1
+          fi
+
+          # `aapt` is a bare name on the Linux runner and `aapt.exe` on a
+          # Windows checkout, so match both — otherwise this step passes
+          # vacuously on one platform and fails on the other. `-name aapt` alone
+          # also would not match `aapt2`, which is what we want: aapt2's dump
+          # subcommand syntax differs and is not worth branching on.
+          AAPT=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f \( -name aapt -o -name aapt.exe \) | sort | tail -1)
+          if [ -z "$AAPT" ]; then
+            echo "::error::No aapt in \$ANDROID_HOME/build-tools — cannot verify permissions."
+            exit 1
+          fi
+          echo "using $AAPT"
+
+          perms=$("$AAPT" dump permissions "$APK")
+          echo "$perms"
+
+          if ! printf '%s' "$perms" | grep -q "uses-permission: name='android.permission.INTERNET'"; then
+            echo "::error::INTERNET is missing — the app cannot reach Supabase or Hugging Face."
+            exit 1
+          fi
+
+          # Deliberately a single line, no backslash continuation. This repo is
+          # checked out with core.autocrlf=true on the author's machine, and a
+          # CRLF line ending turns `\` + newline into an escaped CR followed by a
+          # real newline — which silently splits the command in half. Not worth
+          # the elegance.
+          dangerous='CAMERA|EXTERNAL_STORAGE|READ_MEDIA|RECORD_AUDIO|ACCESS_FINE_LOCATION|ACCESS_COARSE_LOCATION'
+          if printf '%s' "$perms" | grep -qiE "$dangerous"; then
+            echo "::error::A media, storage, audio or location permission entered the merged manifest."
+            echo "::error::The system photo picker needs none of them. Find the plugin that added it"
+            echo "::error::(see android/app/build/outputs/logs/manifest-merger-debug-report.txt)."
+            exit 1
+          fi
+
+          echo "OK: INTERNET present, no camera/storage/media/location permission."
+
+      # Proof, on every run, that the identity is the one the spec requires.
+      # `cap add android` got this wrong the first time (§9, Phase 5 lesson 2).
+      - name: Assert the application id
+        working-directory: android
+        run: |
+          # Note the two syntaxes: `namespace` is an assignment, `applicationId`
+          # is a method call. Grepping for the wrong one silently passes.
+          grep -q 'namespace = "app.flowie"' app/build.gradle
+          grep -q 'applicationId "app.flowie"' app/build.gradle
+          echo "OK: applicationId and namespace are app.flowie"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowie-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+
+      - name: Upload the manifest merger report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-merger-report
+          path: android/app/build/outputs/logs/manifest-merger-debug-report.txt
+          if-no-files-found: ignore
+          retention-days: 14

@@ -9,22 +9,22 @@
   --surface: rgba(255, 255, 255, 0.62);
   --surface-solid: #fdfdfb;
   --ink: #131a15;
-  --muted: #5d6b61;
+  --muted: #55635a;
   --line: rgba(19, 26, 21, 0.1);
   --line-strong: rgba(19, 26, 21, 0.18);
-  --acc: #0c9d6c;
-  --acc-soft: rgba(12, 157, 108, 0.12);
+  --acc: #09704d;
+  --acc-soft: rgba(9, 112, 77, 0.12);
   --acc-ink: #f2fbf6;
-  --amber: #c97a00;
-  --amber-soft: rgba(201, 122, 0, 0.14);
-  --cool: #1f7fa8;
-  --cool-soft: rgba(31, 127, 168, 0.12);
-  --danger: #cf3f4c;
-  --danger-soft: rgba(207, 63, 76, 0.12);
+  --amber: #895300;
+  --amber-soft: rgba(137, 83, 0, 0.14);
+  --cool: #1a698b;
+  --cool-soft: rgba(26, 105, 139, 0.12);
+  --danger: #b42d39;
+  --danger-soft: rgba(180, 45, 57, 0.12);
   --board-1: #f5f3ec;
   --board-2: #e4e0d3;
-  --glow-a: rgba(12, 157, 108, 0.17);
-  --glow-b: rgba(201, 122, 0, 0.14);
+  --glow-a: rgba(9, 112, 77, 0.17);
+  --glow-b: rgba(137, 83, 0, 0.14);
   --shadow-card: 0 1px 2px rgba(19, 26, 21, 0.05), 0 12px 32px -16px rgba(19, 26, 21, 0.22);
 }
 
@@ -51,6 +51,15 @@
   --glow-a: rgba(61, 220, 151, 0.12);
   --glow-b: rgba(255, 184, 77, 0.09);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 40px -18px rgba(0, 0, 0, 0.55);
+}
+
+/* Native controls (select popups, scrollbars, date pickers, autofill) follow
+   the theme instead of always painting light. Phase 4. */
+:root {
+  color-scheme: light;
+}
+.dark {
+  color-scheme: dark;
 }
 
 /* ---------- Map tokens into Tailwind utilities ---------- */
@@ -80,6 +89,9 @@ body {
   margin: 0;
   padding: 0;
   min-height: 100%;
+  /* Never let the OS "helpfully" rescale our type — it fights the tokens. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -88,6 +100,8 @@ body {
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
+  /* The grey flash on tap reads as a glitch next to the nav pill animation. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 ::selection {
@@ -96,11 +110,26 @@ body {
 }
 
 /* ---------- Reusable surfaces ---------- */
+/* Overlay-only surface: sheets, menus, toasts. Blur is cheap here because an
+   overlay is on screen for a moment, and it is what makes a sheet read as
+   floating above the page. Never use it on a permanently-visible fixed bar —
+   see `.bar`. */
 .glass {
   background: var(--surface);
   backdrop-filter: blur(22px) saturate(1.5);
   -webkit-backdrop-filter: blur(22px) saturate(1.5);
   border: 1px solid var(--line);
+}
+
+/* Fixed top/bottom bars. Solid, not frosted (Phase 4, RC-8): a full-width
+   `backdrop-filter` on an element that is always on screen forces the
+   compositor to re-blur the region behind it on every frame the Ambient
+   background animates, for a difference nobody can see through a 54px bar.
+   The shadow does the layering that the blur used to imply. */
+.bar {
+  background: var(--surface-solid);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-card);
 }
 
 .card {
@@ -109,10 +138,12 @@ body {
   box-shadow: var(--shadow-card);
 }
 
+/* 11px is the floor (§7). Was 10px — below the body-text minimum on a
+   1080p-class handset at DPR 2.6, where 10px renders as ~3.8mm caps. */
 .label-micro {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -153,21 +184,24 @@ body {
 }
 
 /* ---------- Motion helpers ---------- */
+/* Travel and scale were roughly halved in Phase 4 (RC-8): the old ranges moved
+   a 70vmax element ~9% of the viewport, which read as a slow slide behind the
+   content rather than as ambient light. Duration went up as travel went down. */
 @keyframes drift-a {
   0% {
-    transform: translate3d(-6%, -4%, 0) scale(1);
+    transform: translate3d(-3%, -2%, 0) scale(1);
   }
   100% {
-    transform: translate3d(5%, 7%, 0) scale(1.15);
+    transform: translate3d(3%, 4%, 0) scale(1.08);
   }
 }
 
 @keyframes drift-b {
   0% {
-    transform: translate3d(4%, 6%, 0) scale(1.1);
+    transform: translate3d(2%, 3%, 0) scale(1.06);
   }
   100% {
-    transform: translate3d(-6%, -5%, 0) scale(0.95);
+    transform: translate3d(-3%, -3%, 0) scale(0.96);
   }
 }
 
@@ -206,4 +240,59 @@ body {
 
 .pulse-dot {
   animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+/* ---------- Accessibility: touch targets (Phase 4) ---------- */
+/* One rule instead of ~100 per-component ones, so a button added tomorrow
+   cannot silently ship a 28px target. `min-*` beats Tailwind's `h-8`/`w-8`
+   because an explicit `height` does not override a `min-height`. The
+   measured audit (tools/probe-a11y.mjs) walks the live DOM and asserts this
+   holds for every rendered control — the rule is the mechanism, the probe is
+   the evidence. */
+button,
+[role="button"],
+summary,
+select,
+input:not([type="hidden"]),
+textarea {
+  min-height: 44px;
+}
+
+button,
+[role="button"],
+summary,
+select {
+  min-width: 44px;
+}
+
+/* ---------- Accessibility: keyboard focus ---------- */
+:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+/* ---------- Accessibility: reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  /* Freeze the ambient drift in place rather than collapsing it to 0.01ms,
+     which would snap the glows to their end-of-animation offset. */
+  [data-ambient-glow] {
+    animation: none !important;
+  }
+  .skeleton {
+    animation: none !important;
+    background: var(--line);
+  }
+  .pulse-dot {
+    animation: none !important;
+  }
+  /* Plain CSS transitions and smooth scrolling. Framer Motion is told the
+     same thing through <MotionConfig reducedMotion="user"> in App.tsx. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

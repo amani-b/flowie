@@ -1,6 +1,16 @@
 import type { Garment, Category, ColorFamily, Warmth, Formality } from "../types";
-import { hexToRgb } from "../lib/utils";
-import { detectPattern, rgbToHex, type PixelSample } from "../lib/patternDetect";
+import type { ReconBbox } from "./garmentRecon";
+import { hexToRgb, withTimeout } from "../lib/utils";
+import { detectPattern, type PixelSample } from "../lib/patternDetect";
+import {
+  EMPTY_PIXEL_TRUTH,
+  SAMPLE_MAX_DIM,
+  pixelTruthFromImageData,
+} from "../lib/pixelSample";
+import { blobToDataUrl } from "../lib/imagePipeline";
+
+// Re-exported so existing callers keep a single import site.
+export { withTimeout };
 
 /**
  * AI-powered garment tagging service using Gemini (flash tier, free).
@@ -17,6 +27,9 @@ import { detectPattern, rgbToHex, type PixelSample } from "../lib/patternDetect"
 /** Gemini flash-tier model for tagging + styling (free tier, vision-capable). */
 export const GEMINI_MODEL = "gemini-3.5-flash";
 
+/** Network ceiling for tagging calls: browser fetch never times out alone. */
+const TAG_TIMEOUT_MS = 25_000;
+
 const GEMINI_KEY = (import.meta.env.VITE_GEMINI_API_KEY ?? "").trim();
 export const geminiReady = GEMINI_KEY.length > 0;
 
@@ -32,6 +45,15 @@ export interface TaggingResult {
   formality: Formality;
   tags: string[];
   confidence: number;
+  /**
+   * Gemini's read of whether the garment carries a logo, graphic, text or
+   * print. A HINT, never a decision: the wearer's `hasPrint` flag (which
+   * routes to the detail renderer) stays wearer-set, because the detail
+   * renderer measurably invents detail on plain garments — a false positive
+   * must not silently re-route. `undefined` means "no opinion" (the
+   * heuristic path can't see structure, so it never claims one).
+   */
+  printHint?: boolean;
 }
 
 const CATEGORY_KEYWORDS: Record<Category, string[]> = {
@@ -116,30 +138,54 @@ const rgbDist = (a: RGB, b: RGB) =>
 
 /**
  * Extract dominant colors and a pattern classification from an image.
- * Backdrop estimation + pixel filtering happen here (canvas/DOM); the
- * actual classification lives in the pure, unit-tested
- * `detectPattern` core (src/lib/patternDetect.ts).
+ *
+ * The heavy part (decode, canvas, backdrop estimation, classification) now
+ * lives in `lib/pixelSample` + `lib/imagePipeline`. This is the thin
+ * main-thread wrapper that keeps its original public contract, and it accepts
+ * a `Blob` so a caller holding a prepared blob never converts it to a data
+ * URL just to sample it.
+ *
+ * `pixelTruth` lets an import pass truth it already computed in the worker,
+ * which removes a whole second decode per garment.
  */
-export async function extractColorsFromImage(imageDataUrl: string): Promise<{
-  colors: string[];
-  pattern: TaggingResult["pattern"];
-  shares: number[];
-}> {
-  return new Promise((resolve) => {
+export async function extractColorsFromImage(
+  image: Blob | string,
+  pixelTruth?: { colors: string[]; pattern: TaggingResult["pattern"]; shares: number[] }
+): Promise<{ colors: string[]; pattern: TaggingResult["pattern"]; shares: number[] }> {
+  if (pixelTruth) return { ...pixelTruth };
+
+  // Resolve-only by design (any decode failure yields the gray fallback),
+  // so race a timeout around it: if neither onload nor onerror ever fires,
+  // reject into the caller's fallback instead of pending forever.
+  const work = new Promise<{
+    colors: string[];
+    pattern: TaggingResult["pattern"];
+    shares: number[];
+  }>((resolve) => {
+    let objectUrl: string | null = null;
+    const finish = (v: {
+      colors: string[];
+      pattern: TaggingResult["pattern"];
+      shares: number[];
+    }) => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      resolve(v);
+    };
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        resolve({ colors: ["#6B7280"], pattern: "solid", shares: [1] });
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const srcW = img.naturalWidth || img.width;
+      const srcH = img.naturalHeight || img.height;
+      if (!ctx || srcW < 1 || srcH < 1) {
+        finish({ ...EMPTY_PIXEL_TRUTH });
         return;
       }
       // Downscale for performance — 128px keeps narrow stripes resolvable
       // (64px blurs them into the background tone entirely).
-      const maxDim = 128;
-      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-      const w = Math.max(1, Math.round(img.width * scale));
-      const h = Math.max(1, Math.round(img.height * scale));
+      const scale = Math.min(1, SAMPLE_MAX_DIM / Math.max(srcW, srcH));
+      const w = Math.max(1, Math.round(srcW * scale));
+      const h = Math.max(1, Math.round(srcH * scale));
       canvas.width = w;
       canvas.height = h;
       // Flatten onto white in case any transparency survived upstream —
@@ -147,97 +193,21 @@ export async function extractColorsFromImage(imageDataUrl: string): Promise<{
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
-
-      const imageData = ctx.getImageData(0, 0, w, h);
-      const pixels = imageData.data;
-      const pixelAt = (x: number, y: number): RGB => {
-        const i = (y * w + x) * 4;
-        return { r: pixels[i], g: pixels[i + 1], b: pixels[i + 2] };
-      };
-      const isGarmentPx = (r: number, g: number, b: number, a: number): boolean => {
-        if (a < 128) return false;
-        if (backdrop && rgbDist({ r, g, b }, backdrop) < 42) return false;
-        // Safety net when no clear backdrop was detected: pure white
-        // studio blowout right at the edge of exposure is still almost
-        // never the garment itself.
-        if (!backdrop && r > 250 && g > 250 && b > 250) return false;
-        return true;
-      };
-
-      // Estimate the backdrop from the border pixels: garment photos are
-      // typically shot centered on a plain backdrop (white, gray, etc.), so
-      // the frame edge is a reasonable proxy for "not the garment" — a lot
-      // more reliable than assuming the backdrop is always white.
-      const border: RGB[] = [];
-      const xStep = Math.max(1, Math.floor(w / 12));
-      const yStep = Math.max(1, Math.floor(h / 12));
-      for (let x = 0; x < w; x += xStep) {
-        border.push(pixelAt(x, 0));
-        border.push(pixelAt(x, h - 1));
+      try {
+        finish(pixelTruthFromImageData(ctx.getImageData(0, 0, w, h).data, w, h));
+      } catch {
+        finish({ ...EMPTY_PIXEL_TRUTH });
       }
-      for (let y = 0; y < h; y += yStep) {
-        border.push(pixelAt(0, y));
-        border.push(pixelAt(w - 1, y));
-      }
-
-      let backdrop: RGB | null = null;
-      if (border.length > 0) {
-        const sum = border.reduce(
-          (acc, p) => ({ r: acc.r + p.r, g: acc.g + p.g, b: acc.b + p.b }),
-          { r: 0, g: 0, b: 0 }
-        );
-        const mean: RGB = { r: sum.r / border.length, g: sum.g / border.length, b: sum.b / border.length };
-        const agree = border.filter((p) => rgbDist(p, mean) < 40).length;
-        // Only trust this as a real backdrop if most border samples agree —
-        // otherwise the garment likely fills the frame and there's nothing
-        // to subtract (subtracting a "backdrop" here would eat the garment).
-        if (agree / border.length > 0.6) backdrop = mean;
-      }
-
-      // Collect garment-only samples (backdrop/transparent skipped) with
-      // normalized positions, then classify with the tested pure core.
-      const pos = (x: number, y: number) => ({
-        x: x / Math.max(1, w - 1),
-        y: y / Math.max(1, h - 1),
-      });
-      const samples: PixelSample[] = [];
-      const unfiltered: PixelSample[] = [];
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const i = (y * w + x) * 4;
-          const r = pixels[i];
-          const g = pixels[i + 1];
-          const b = pixels[i + 2];
-          const a = pixels[i + 3];
-          if (a < 128) continue;
-          unfiltered.push({ r, g, b, ...pos(x, y) });
-          if (!isGarmentPx(r, g, b, a)) continue;
-          samples.push({ r, g, b, ...pos(x, y) });
-        }
-      }
-      // Low-yield guard: white/cream garments on near-white backdrops get
-      // eaten by subtraction (white stripes read as "background"). If the
-      // filter kept less than ~a third of the frame, the "backdrop" is
-      // probably the garment itself — analyze everything instead.
-      const usable = samples.length >= w * h * 0.35 ? samples : unfiltered;
-
-      if (usable.length === 0) {
-        resolve({ colors: ["#6B7280"], pattern: "solid", shares: [1] });
-        return;
-      }
-
-      const analysis = detectPattern(usable);
-      const colors = analysis.colors.map(rgbToHex);
-      const shares = analysis.colors.map((c) => c.share);
-      resolve({
-        colors: colors.length > 0 ? colors : ["#6B7280"],
-        pattern: analysis.pattern,
-        shares: shares.length > 0 ? shares : [1],
-      });
     };
-    img.onerror = () => resolve({ colors: ["#6B7280"], pattern: "solid", shares: [1] });
-    img.src = imageDataUrl;
+    img.onerror = () => finish({ ...EMPTY_PIXEL_TRUTH });
+    if (typeof image === "string") {
+      img.src = image;
+    } else {
+      objectUrl = URL.createObjectURL(image);
+      img.src = objectUrl;
+    }
   });
+  return withTimeout(work, TAG_TIMEOUT_MS, "Color extraction");
 }
 
 function guessWarmth(text: string): Warmth {
@@ -255,7 +225,11 @@ function guessFormality(text: string): Formality {
 }
 
 /** Client-side heuristic fallback when Gemini is unavailable. */
-export async function tagGarmentHeuristic(file: File, imageDataUrl?: string): Promise<TaggingResult> {
+export async function tagGarmentHeuristic(
+  file: File,
+  image?: Blob | string,
+  pixelTruth?: { colors: string[]; pattern: TaggingResult["pattern"]; shares: number[] }
+): Promise<TaggingResult> {
   const safeName = (file.name ?? "Untitled piece").replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
 
   // Use actual image color extraction instead of filename guessing
@@ -267,9 +241,9 @@ export async function tagGarmentHeuristic(file: File, imageDataUrl?: string): Pr
   // the only high-confidence call it gets to make.
   let confidence = 0.5;
 
-  if (imageDataUrl) {
+  if (image) {
     try {
-      const extracted = await extractColorsFromImage(imageDataUrl);
+      const extracted = await extractColorsFromImage(image, pixelTruth);
       colors = extracted.colors;
       pattern = extracted.pattern;
       patternMix = extracted.shares;
@@ -288,7 +262,9 @@ export async function tagGarmentHeuristic(file: File, imageDataUrl?: string): Pr
 
   // Prefer the family of the actual sampled color; only fall back to a
   // filename guess when there's no photo to sample from at all.
-  const colorFamily = imageDataUrl ? classifyColorFamily(colors[0]) : guessColor(safeName).family;
+  const colorFamily = image
+    ? classifyColorFamily(colors[0])
+    : guessColor(safeName).family;
 
   return {
     name: safeName || "Untitled piece",
@@ -301,26 +277,168 @@ export async function tagGarmentHeuristic(file: File, imageDataUrl?: string): Pr
     formality: guessFormality(safeName),
     tags: [],
     confidence,
+    // No print opinion: the pixel path can sample colors but cannot see a
+    // small logo on a solid fabric, and a wrong hint costs the wearer a
+    // decision — so the fallback stays silent rather than guessing.
+    printHint: undefined,
   };
 }
 
-async function viaGemini(imageDataUrl: string): Promise<TaggingResult> {
+/**
+ * Parse the model's `printHint` field. Strict on purpose: only a real boolean
+ * counts, anything else (missing, string, null) is "no opinion". The hint
+ * powers a suggestion the wearer confirms, so a hallucinated `true` would
+ * push a plain garment toward the detail renderer — the exact failure the
+ * klein spike measured. Exported for direct testing of that contract.
+ */
+export function parsePrintHint(raw: unknown): boolean | undefined {
+  return typeof raw === "boolean" ? raw : undefined;
+}
+
+/**
+ * Parse a garment bounding box from the model's JSON: four numbers in the
+ * Wardrobe 1000×1000 normalized system (the image scaled so its larger
+ * dimension is 1000). Strict — anything malformed returns null and the
+ * caller keeps the full-frame stub, because a bad crop costs render quality
+ * while the stub is a known-safe fallback. Clamping keeps a slightly
+ * out-of-range answer usable instead of discarding it.
+ *
+ * Exported for direct testing of the contract.
+ */
+export function parseBbox(raw: unknown): ReconBbox | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const nums = [r.x, r.y, r.width, r.height];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  const [x0, y0, w0, h0] = nums as [number, number, number, number];
+  // Reject non-positive sizes outright; clamp positions into the grid.
+  if (w0 <= 0 || h0 <= 0) return null;
+  const x = Math.min(Math.max(x0, 0), 1000);
+  const y = Math.min(Math.max(y0, 0), 1000);
+  const width = Math.min(w0, 1000 - x);
+  const height = Math.min(h0, 1000 - y);
+  // A degenerate sliver is not a garment — treat as no answer.
+  if (width < 50 || height < 50) return null;
+  return { x, y, width, height };
+}
+
+/** Network ceiling for the bbox call — same discipline as tagging. */
+const BBOX_TIMEOUT_MS = 20_000;
+
+/**
+ * Ask Gemini where the garment is, as a 1000×1000-normalized bounding box.
+ *
+ * This is the first real implementation of the recon analyzer contract (the
+ * stub that preceded it returned the full frame for every photo, so a worn
+ * or multi-garment photo reached the renderer un-cropped). Returns null on
+ * ANY failure — no key, 429, malformed, network — and the caller falls back
+ * to the stub. Never throws: a failed crop costs quality, a thrown analyzer
+ * would cost the whole recon job.
+ */
+export async function analyzeGarmentBbox(
+  image: Blob | string,
+  dataUrl?: string,
+  signal?: AbortSignal
+): Promise<ReconBbox | null> {
+  if (!geminiReady) return null;
+  // Three shapes reach here: a ready data URL (fast path), an http(s) URL
+  // (live-mode `photo`, fetched to bytes), or a Blob. All end as base64.
+  const base64 = dataUrl
+    ? dataUrl.slice(dataUrl.indexOf(",") + 1)
+    : typeof image === "string"
+      ? await fetch(image)
+          .then((r) => {
+            if (!r.ok) throw new Error(`photo fetch HTTP ${r.status}`);
+            return r.blob();
+          })
+          .then((b) => blobToDataUrl(b))
+          .then((u) => u.slice(u.indexOf(",") + 1))
+      : await blobToDataUrl(image).then((u) => u.slice(u.indexOf(",") + 1));
+  const prompt =
+    `You are a precise garment locator. Look at this clothing photo and return ONLY valid JSON:\n` +
+    `{"x":0-1000,"y":0-1000,"width":0-1000,"height":0-1000}\n` +
+    `Rules. The photo may show a garment worn on a person, on a hanger, or laid flat, possibly with other garments or clutter in frame. ` +
+    `Report the bounding box of THE MAIN GARMENT ONLY (the one occupying the most frame area), as a tight rectangle that excludes the background, other garments, hands, hangers, and any person's skin or body. ` +
+    `Use a 1000x1000 normalized grid: scale the image so its LARGER dimension is 1000 and the smaller is centered (letterboxed) within the grid, then give x/y of the top-left corner and width/height of the garment rectangle in those units. ` +
+    `If the garment genuinely fills the frame, a near-full-frame box is correct. If you cannot identify any garment, return {"x":20,"y":20,"width":960,"height":960}.`;
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(BBOX_TIMEOUT_MS)]) : AbortSignal.timeout(BBOX_TIMEOUT_MS),
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: prompt },
+                { inlineData: { mimeType: "image/jpeg", data: base64 } },
+              ],
+            },
+          ],
+          generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
+        }),
+      }
+    );
+    if (!res.ok) {
+      if (res.status === 429) console.warn("[garment-bbox] Gemini quota exceeded — using full-frame fallback");
+      else console.warn(`[garment-bbox] Gemini ${res.status} — using full-frame fallback`);
+      return null;
+    }
+    const json = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) return null;
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    return parseBbox(parsed);
+  } catch (e) {
+    // Aborts propagate as null too — the caller decides what a cancel means.
+    console.warn("[garment-bbox] failed, using full-frame fallback:", e);
+    return null;
+  }
+}
+
+/**
+ * Ask Gemini for tags. Accepts a Blob or a data URL.
+ *
+ * A Blob is encoded here, once, because the Gemini REST payload requires
+ * inline base64. Accepting the Blob is what lets the caller pass an already
+ * encoded `dataUrl` through untouched (see `tagGarmentPhoto`), so a bulk
+ * import never re-encodes the same bytes twice.
+ */
+async function viaGemini(
+  image: Blob | string,
+  dataUrl?: string,
+  signal?: AbortSignal
+): Promise<TaggingResult> {
+  const base64 = dataUrl
+    ? dataUrl.slice(dataUrl.indexOf(",") + 1)
+    : await blobToDataUrl(image as Blob).then((u) => u.slice(u.indexOf(",") + 1));
   const prompt =
     `You are a precise garment analyst. Look at this clothing photo and return ONLY valid JSON:\n` +
-    `{"name":"brief descriptive name","category":"one of: top/bottom/dress/outerwear/shoes/accessory","colors":["#RRGGBB", ...],"pattern":"solid|striped|colorblock|other","colorFamily":"one of: neutral/warm/cool/earth/accent","warmth":1-3,"formality":1-3,"tags":["optional keywords"]}\n` +
-    `Rules. Category must match exactly one option. colors: 1-3 hex values of the ACTUAL garment fabric (most prominent first) — describe the dominant color, then any real secondary colors; ignore the photo backdrop, hanger, shadows and shading gradients. pattern: classify honestly — "solid" for a plain single-color garment (shadows, folds and texture are still solid), "striped" ONLY for clear repeating stripes, "colorblock" for large distinct color regions, "other" for plaid/checks/florals/graphics/dots/prints. When in doubt between solid and patterned, choose solid. Warmth: 1=light/summer, 2=mid-season, 3=heavy/winter. Formality: 1=casual, 2=smart, 3=formal.`;
+    `{"name":"brief descriptive name","category":"one of: top/bottom/dress/outerwear/shoes/accessory","colors":["#RRGGBB", ...],"pattern":"solid|striped|colorblock|other","colorFamily":"one of: neutral/warm/cool/earth/accent","warmth":1-3,"formality":1-3,"printHint":true|false,"tags":["optional keywords"]}\n` +
+    `Rules. Category must match exactly one option. colors: 1-3 hex values of the ACTUAL garment fabric (most prominent first) — describe the dominant color, then any real secondary colors; ignore the photo backdrop, hanger, shadows and shading gradients. pattern: classify honestly — "solid" for a plain single-color garment (shadows, folds and texture are still solid), "striped" ONLY for clear repeating stripes, "colorblock" for large distinct color regions, "other" for plaid/checks/florals/graphics/dots/prints. When in doubt between solid and patterned, choose solid. printHint: true ONLY when the garment carries a logo, graphic, text or print (brand marks, slogans, artwork, repeated lettering); false for plain fabrics and for stripes/colorblocks alone — those are pattern, not print. When in doubt, false. Warmth: 1=light/summer, 2=mid-season, 3=heavy/winter. Formality: 1=casual, 2=smart, 3=formal.`;
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // AbortSignal.timeout: fetch has no default timeout — a stalled
+      // connection used to hang tagGarmentPhoto (and the upload spinner)
+      // forever instead of falling back to the heuristic path. A caller
+      // signal is honoured too, so "Stop" on an import aborts in flight
+      // instead of waiting out the ceiling.
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TAG_TIMEOUT_MS)]) : AbortSignal.timeout(TAG_TIMEOUT_MS),
       body: JSON.stringify({
         contents: [
           {
             parts: [
               { text: prompt },
-              { inlineData: { mimeType: "image/jpeg", data: imageDataUrl.split(",")[1] } },
+              { inlineData: { mimeType: "image/jpeg", data: base64 } },
             ],
           },
         ],
@@ -374,12 +492,12 @@ async function viaGemini(imageDataUrl: string): Promise<TaggingResult> {
     formality: (parsed.formality && parsed.formality >= 1 && parsed.formality <= 3) ? parsed.formality : 2,
     tags: Array.isArray(parsed.tags) ? parsed.tags : [],
     confidence: 0.85,
+    printHint: parsePrintHint(parsed.printHint),
   };
 }
 
 /**
- * Pixel-truth clamp: when the sampled pixels show one color owning the
- * garment (>=90%), a patterned label is a hallucination — force solid and
+ * Pixel-truth clamp: when the sampled pixels show one color owning the * garment (>=90%), a patterned label is a hallucination — force solid and
  * keep the sampled colors. Vision models occasionally read shading or
  * texture as pattern; pixels don't lie about area share.
  */
@@ -398,13 +516,45 @@ function clampPatternToPixels(
  * Main entry point: analyze a garment photo.
  * Returns structured tagging data for user confirmation before saving.
  */
-export async function tagGarmentPhoto(imageDataUrl: string, fileName: string): Promise<TaggingResult> {
+export interface TagPhotoOptions {
+  /**
+   * A data URL already encoded from `image`. Passed straight through to the
+   * Gemini payload so a caller holding one (the import queue does) pays the
+   * base64 cost once rather than again here.
+   */
+  dataUrl?: string;
+  /** Caller cancellation, combined with the internal timeout. */
+  signal?: AbortSignal;
+  /** Pixel truth already computed upstream (worker), skipping a 2nd decode. */
+  pixelTruth?: { colors: string[]; pattern: TaggingResult["pattern"]; shares: number[] };
+}
+
+/**
+ * Main entry point: analyze a garment photo.
+ * Returns structured tagging data for user confirmation before saving.
+ *
+ * Accepts a `Blob` (preferred) or a data URL, for backwards compatibility.
+ * Both the Gemini path and the heuristic fallback used to re-wrap the data
+ * URL with `fetch(dataUrl).blob()` just to get bytes back — decoding a
+ * ~1.3 MB base64 payload twice per garment. With a Blob there is nothing to
+ * unwrap, so both re-wraps are gone.
+ */
+export async function tagGarmentPhoto(
+  image: Blob | string,
+  fileName: string,
+  opts: TagPhotoOptions = {}
+): Promise<TaggingResult> {
+  const { dataUrl, signal, pixelTruth } = opts;
+  // Only a string needs materialising into a Blob; a Blob is already one.
+  const asBlob = async (): Promise<Blob> =>
+    typeof image === "string" ? fetch(image).then((r) => r.blob()) : image;
+
   if (geminiReady) {
     try {
       const [tagged, pixels] = await Promise.all([
-        viaGemini(imageDataUrl),
+        viaGemini(image, dataUrl, signal),
         // Pixel ground truth in parallel: cheap, local, no extra API cost.
-        extractColorsFromImage(imageDataUrl).catch(() => null),
+        extractColorsFromImage(image, pixelTruth).catch(() => null),
       ]);
       const clamped = pixels ? clampPatternToPixels(tagged, pixels) : tagged;
       // Always attach the locally measured mix so the avatar renders the
@@ -413,10 +563,11 @@ export async function tagGarmentPhoto(imageDataUrl: string, fileName: string): P
         clamped.patternMix = pixels.shares;
       } else {
         try {
-          const blob = await fetch(imageDataUrl).then((r) => r.blob());
+          const blob = await asBlob();
           const heur = await tagGarmentHeuristic(
             new File([blob], fileName, { type: blob.type }),
-            imageDataUrl
+            blob,
+            pixelTruth
           );
           clamped.patternMix = heur.patternMix;
         } catch {
@@ -425,18 +576,38 @@ export async function tagGarmentPhoto(imageDataUrl: string, fileName: string): P
       }
       return clamped;
     } catch (e) {
+      if (signal?.aborted) throw e;
       console.warn("Gemini tagging failed, falling back to heuristic:", e);
       // Fall through to heuristic
     }
   }
-  // Create a fake File for the heuristic fallback
-  const blob = await fetch(imageDataUrl).then((r) => r.blob());
+  // Heuristic fallback: the same bytes, never a re-fetch of a data URL.
+  const blob = await asBlob();
   const file = new File([blob], fileName, { type: blob.type });
-  return tagGarmentHeuristic(file, imageDataUrl);
+  return tagGarmentHeuristic(file, blob, pixelTruth);
 }
 
-/** Convert TaggingResult to garment fields. The store mints the id/createdAt. */
-export function taggingToGarment(t: TaggingResult, imageDataUrl?: string): Omit<Garment, "id" | "createdAt"> {
+/**
+ * Convert TaggingResult to garment fields. The store mints the id/createdAt.
+ *
+ * `sha256` is the prepared-image content hash from the import pipeline
+ * (`PreparedImage.sha256`). It rides along so reconstruction can be cached by
+ * source content (see `services/reconCache.ts`) — re-importing identical
+ * bytes must not spend a second remote call. Optional because manual/legacy
+ * records have no hash; those fall back to a length-based cache key.
+ *
+ * `printConfirmed` is the wearer's explicit answer to the model's
+ * `printHint` (asked during review). It is the ONLY path that may write the
+ * wearer-set `hasPrint` flag from a tagging result — the hint itself never
+ * picks the renderer, because the detail renderer measurably invents detail
+ * on plain garments (see spec §9, klein detail-spike verdict).
+ */
+export function taggingToGarment(
+  t: TaggingResult,
+  imageDataUrl?: string,
+  sha256?: string,
+  printConfirmed?: boolean
+): Omit<Garment, "id" | "createdAt"> {
   return {
     name: t.name,
     category: t.category,
@@ -448,6 +619,8 @@ export function taggingToGarment(t: TaggingResult, imageDataUrl?: string): Omit<
     warmth: t.warmth,
     formality: t.formality,
     kind: t.category === "accessory" ? (t.tags.find((tag) => ["scarf", "cap", "bag"].includes(tag)) as any) : undefined,
+    hasPrint: printConfirmed || undefined,
     photo: imageDataUrl,
+    photoSha256: sha256 || undefined,
   };
 }

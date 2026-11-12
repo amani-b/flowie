@@ -1,5 +1,16 @@
 # FitFlow AI — Project Handoff
 
+> ⚠️ **SUPERSEDED — DO NOT USE AS A HANDOFF.** This file is a stale snapshot
+> from the 2026-09-23 session. Its phase numbering ("Phase 2 next"), its
+> architecture table (`src/components/Avatar.tsx`), and its persist version
+> (`v2`) no longer match the code. It is kept only for historical context and
+> is retained in git history if deleted.
+>
+> The single authoritative engineering specification is
+> `docs/ENGINEERING_EXECUTION_SPEC.md`; the single handoff prompt is
+> `docs/IMPLEMENTER_HANDOFF.md`. The recon pipeline section below is still
+> accurate and is mirrored in the spec.
+
 > Read this first. It tells a fresh session everything needed to continue
 > without rebuilding what already exists.
 
@@ -93,3 +104,59 @@ lucide-react, Supabase (auth/Postgres/RLS/storage), Open-Meteo, Gemini.
 
 > "Read HANDOFF.md. This is FitFlow AI — Phases 0–1 are done and building.
 > Continue with Phase 2: [task]. Don't rebuild existing layers."
+
+---
+
+## Garment reconstruction pipeline (ACTIVE workstream, 2026-09-23)
+
+Single source of truth: original photo → analyzer stub (full-frame bbox,
+Qwen3-VL-8B pending) → `recon-garment` Edge Function → renderer by
+garment.hasPrint (TryOffDiff default, Klein for print) → recon PNG on
+`garment.reconUrl` (+ `recon_url` column) → GarmentPhoto shows recon,
+SVG skeleton underneath while pending.
+
+- **Renderer (default):** TryOffDiffv2-MGT via YOUR Space
+  `amani-b/garment-flat-lay-flowie` (Gradio SDK, ZeroGPU hw, 30 s reserved).
+  Engine source mirrored at `D:\Projects\flowie-app\hf-tryoff\`.
+  Easy case (navy trousers) PASS; hard case (GUESS shorts) shape/color PASS,
+  micro-print dropped (measured limitation — routed around, not fixed).
+- **Renderer (detail):** FLUX.2-klein-base-4B via YOUR Space
+  `amani-b/klein-garment-test` (Apache-2.0, public, ~13 GB VRAM, 60 s
+  reserved; source at `hf-klein/`). Track 2 verdict (2 bounded calls,
+  Sept 2026): GUESS tape legible where TryOffDiff drops it — BUT invents
+  drawstring + side stripes on plain navy trousers and shifts color
+  saturation. Wearer-set `hasPrint` flag decides (stub analyzer cannot
+  detect prints); ready tiles show "· detail render" for Klein builds.
+- **Harness:** `scripts/recon-harness.mjs` — saves every intermediate to
+  `recon-work/<slug>/` (original, analysis.json, bbox.json, crop.jpg,
+  recon-raw.png, chroma.png, final.png, qa.json). `--tryoff` for remote,
+  `--klein` for the detail Space (bounded tests only),
+  `--selftest` for zero-quota end-to-end (synthetic chroma fixture),
+  `--bbox=x,y,w,h` for worn-photo boxes. Backend creds from `.env`:
+  `HF_TRYOFF_SPACE_ID`, `HF_KLEIN_SPACE_ID`, `HF_TOKEN` (never hardcoded,
+  no `VITE_` prefix).
+- **Edge Function:** `supabase/functions/recon-garment/` (replaces retired
+  `enhance-garment` + `flatlay-tryoff`). Deploy:
+  `supabase functions deploy recon-garment --no-verify-jwt`, secrets
+  `HF_TRYOFF_SPACE_ID` + `HF_KLEIN_SPACE_ID` + `HF_TOKEN`. Delete the two
+  retired functions from the dashboard.
+- **DB:** apply `supabase/migration_recon_url.sql` + new
+  `supabase/migration_has_print.sql` once each (dashboard → SQL editor).
+  Client works without them (column guards), SVG skeleton unaffected.
+  `studio_render_url` (FLUX re-light) is retired — never written; legacy
+  values ignored even when present.
+- **Quota (free):** 30 s tryoff / 60 s klein reserved per call → ~4 recon/day
+  budget client-side (`RECON_DAILY_BUDGET`), shared ZeroGPU pool (5 min/day).
+  Check remainder at https://huggingface.co/settings/billing.
+- **Retired 2026-09-23:** `studioComposite` (ISNet), `studioEnhance`
+  (FLUX-schnell), `studioTryoff` (whole-image caller), `studioFlatlay`
+  (Gemini billable), `closetUpgrade` bulk rollout, schnell `hf-space/`,
+  old test scripts, `@imgly/*`, `@huggingface/inference|transformers`,
+  `puppeteer-core`. Persist v12 scrubs old rendering fields. SVG
+  (`studioRender.ts`) stays ONLY as the dumb loading skeleton.
+- **Parked:** `hf-qwen/` self-hosted Qwen-Image-Edit-2511
+  (`amani-b/flowie-qwen-edit`): 20B bf16 OOMs free ZeroGPU at weight-pack
+  time (NVML/CUDACachingAllocator assert — model-loading failure, NOT auth
+  or scheduler; verified via Space UI test). Do NOT retry on free tier
+  without FP8/smaller weights. Official Qwen Space scheduler-blocked
+  (180 s refused).

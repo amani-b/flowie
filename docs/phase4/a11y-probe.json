@@ -1,0 +1,622 @@
+{
+  "enteredDemo": true,
+  "viewport": {
+    "meta": "width=device-width, initial-scale=1.0, viewport-fit=cover",
+    "zoomBlocked": false
+  },
+  "fixedBars": [
+    {
+      "tag": "div",
+      "backdropFilter": "none",
+      "backgroundColor": "rgb(253, 253, 251)",
+      "height": 54
+    },
+    {
+      "tag": "div",
+      "backdropFilter": "none",
+      "backgroundColor": "rgb(253, 253, 251)",
+      "height": 64
+    }
+  ],
+  "blurredElements": [
+    {
+      "tag": "div",
+      "cls": "glass flex items-center gap-2 rounded-full py-2.",
+      "backdropFilter": "blur(22px) saturate(1.5)"
+    }
+  ],
+  "reducedMotion": {
+    "emulated": false,
+    "ambient": [
+      {
+        "animationName": "drift-a",
+        "animationDuration": "44s"
+      },
+      {
+        "animationName": "drift-b",
+        "animationDuration": "56s"
+      }
+    ]
+  },
+  "focus": {
+    "rulePresent": true,
+    "probe": {
+      "matchesFocusVisible": true,
+      "outlineStyle": "solid",
+      "outlineWidth": "1.77778px",
+      "outlineColor": "rgb(9, 112, 77)"
+    }
+  },
+  "tabSwitch": {
+    "coldMs": {
+      "closet": 71.1,
+      "studio": 85.2,
+      "looks": 78.3,
+      "calendar": 53
+    },
+    "warmMs": {
+      "home": 48,
+      "closet": 14.7,
+      "studio": 15.4,
+      "looks": 16.5,
+      "calendar": 16.6
+    },
+    "mountedScreens": 5,
+    "domNodes": 469,
+    "frames": 61,
+    "emptyFrames": 0
+  },
+  "totals": {
+    "controlsMeasured": 83,
+    "tapTargetsBelow44": 0,
+    "textBelow11px": 0,
+    "syneElements": 10
+  },
+  "screens": {
+    "home": {
+      "controlsMeasured": 15,
+      "tapTargetsBelow44": [],
+      "overflowingViewport": [],
+      "textBelow11px": [],
+      "syneElements": [
+        {
+          "tag": "span",
+          "label": "Flowie",
+          "cls": "font-display text-[17px] font-extrabold tracking-tight",
+          "fontSize": 17,
+          "text": "Flowie"
+        },
+        {
+          "tag": "h1",
+          "label": "Good afternoon, Ava",
+          "cls": "font-display text-[27px] font-extrabold leading-tight tracking-t",
+          "fontSize": 27,
+          "text": "Good afternoon, Ava"
+        }
+      ],
+      "docOverflowX": 0,
+      "ariaState": {
+        "pressed": [
+          {
+            "label": "Combine into one outfit",
+            "pressed": "false"
+          },
+          {
+            "label": "All4",
+            "pressed": "true"
+          },
+          {
+            "label": "Tops4",
+            "pressed": "false"
+          },
+          {
+            "label": "Bottoms0",
+            "pressed": "false"
+          },
+          {
+            "label": "Dresses0",
+            "pressed": "false"
+          },
+          {
+            "label": "Outerwear0",
+            "pressed": "false"
+          },
+          {
+            "label": "Shoes0",
+            "pressed": "false"
+          },
+          {
+            "label": "Extras0",
+            "pressed": "false"
+          },
+          {
+            "label": "AI Stylist",
+            "pressed": "true"
+          },
+          {
+            "label": "Style it yourself",
+            "pressed": "false"
+          },
+          {
+            "label": "Casual",
+            "pressed": "true"
+          },
+          {
+            "label": "Work",
+            "pressed": "false"
+          },
+          {
+            "label": "Date",
+            "pressed": "false"
+          },
+          {
+            "label": "Gym",
+            "pressed": "false"
+          },
+          {
+            "label": "Party",
+            "pressed": "false"
+          },
+          {
+            "label": "Week",
+            "pressed": "true"
+          },
+          {
+            "label": "Month",
+            "pressed": "false"
+          },
+          {
+            "label": "History",
+            "pressed": "false"
+          }
+        ],
+        "current": [
+          {
+            "label": "Today",
+            "current": "page"
+          }
+        ],
+        "labelledGroups": [
+          "Styling mode",
+          "Calendar view"
+        ]
+      }
+    },
+    "closet": {
+      "controlsMeasured": 20,
+      "tapTargetsBelow44": [],
+      "overflowingViewport": [],
+      "textBelow11px": [],
+      "syneElements": [
+        {
+          "tag": "span",
+          "label": "Flowie",
+          "cls": "font-display text-[17px] font-extrabold tracking-tight",
+          "fontSize": 17,
+          "text": "Flowie"
+        },
+        {
+          "tag": "h1",
+          "label": "Closet",
+          "cls": "font-display text-[27px] font-extrabold tracking-tight",
+          "fontSize": 27,
+          "text": "Closet"
+        }
+      ],
+      "docOverflowX": 0,
+      "ariaState": {
+        "pressed": [
+          {
+            "label": "Combine into one outfit",
+            "pressed": "false"
+          },
+          {
+            "label": "All4",
+            "pressed": "true"
+          },
+          {
+            "label": "Tops4",
+            "pressed": "false"
+          },
+          {
+            "label": "Bottoms0",
+            "pressed": "false"
+          },
+          {
+            "label": "Dresses0",
+            "pressed": "false"
+          },
+          {
+            "label": "Outerwear0",
+            "pressed": "false"
+          },
+          {
+            "label": "Shoes0",
+            "pressed": "false"
+          },
+          {
+            "label": "Extras0",
+            "pressed": "false"
+          },
+          {
+            "label": "AI Stylist",
+            "pressed": "true"
+          },
+          {
+            "label": "Style it yourself",
+            "pressed": "false"
+          },
+          {
+            "label": "Casual",
+            "pressed": "true"
+          },
+          {
+            "label": "Work",
+            "pressed": "false"
+          },
+          {
+            "label": "Date",
+            "pressed": "false"
+          },
+          {
+            "label": "Gym",
+            "pressed": "false"
+          },
+          {
+            "label": "Party",
+            "pressed": "false"
+          },
+          {
+            "label": "Week",
+            "pressed": "true"
+          },
+          {
+            "label": "Month",
+            "pressed": "false"
+          },
+          {
+            "label": "History",
+            "pressed": "false"
+          }
+        ],
+        "current": [
+          {
+            "label": "Closet",
+            "current": "page"
+          }
+        ],
+        "labelledGroups": [
+          "Styling mode",
+          "Calendar view"
+        ]
+      }
+    },
+    "studio": {
+      "controlsMeasured": 16,
+      "tapTargetsBelow44": [],
+      "overflowingViewport": [],
+      "textBelow11px": [],
+      "syneElements": [
+        {
+          "tag": "span",
+          "label": "Flowie",
+          "cls": "font-display text-[17px] font-extrabold tracking-tight",
+          "fontSize": 17,
+          "text": "Flowie"
+        },
+        {
+          "tag": "h1",
+          "label": "Studio",
+          "cls": "font-display text-[27px] font-extrabold tracking-tight",
+          "fontSize": 27,
+          "text": "Studio"
+        }
+      ],
+      "docOverflowX": 0,
+      "ariaState": {
+        "pressed": [
+          {
+            "label": "Combine into one outfit",
+            "pressed": "false"
+          },
+          {
+            "label": "All4",
+            "pressed": "true"
+          },
+          {
+            "label": "Tops4",
+            "pressed": "false"
+          },
+          {
+            "label": "Bottoms0",
+            "pressed": "false"
+          },
+          {
+            "label": "Dresses0",
+            "pressed": "false"
+          },
+          {
+            "label": "Outerwear0",
+            "pressed": "false"
+          },
+          {
+            "label": "Shoes0",
+            "pressed": "false"
+          },
+          {
+            "label": "Extras0",
+            "pressed": "false"
+          },
+          {
+            "label": "AI Stylist",
+            "pressed": "true"
+          },
+          {
+            "label": "Style it yourself",
+            "pressed": "false"
+          },
+          {
+            "label": "Casual",
+            "pressed": "true"
+          },
+          {
+            "label": "Work",
+            "pressed": "false"
+          },
+          {
+            "label": "Date",
+            "pressed": "false"
+          },
+          {
+            "label": "Gym",
+            "pressed": "false"
+          },
+          {
+            "label": "Party",
+            "pressed": "false"
+          },
+          {
+            "label": "Week",
+            "pressed": "true"
+          },
+          {
+            "label": "Month",
+            "pressed": "false"
+          },
+          {
+            "label": "History",
+            "pressed": "false"
+          }
+        ],
+        "current": [
+          {
+            "label": "Studio",
+            "current": "page"
+          }
+        ],
+        "labelledGroups": [
+          "Styling mode",
+          "Calendar view"
+        ]
+      }
+    },
+    "looks": {
+      "controlsMeasured": 11,
+      "tapTargetsBelow44": [],
+      "overflowingViewport": [],
+      "textBelow11px": [],
+      "syneElements": [
+        {
+          "tag": "span",
+          "label": "Flowie",
+          "cls": "font-display text-[17px] font-extrabold tracking-tight",
+          "fontSize": 17,
+          "text": "Flowie"
+        },
+        {
+          "tag": "h1",
+          "label": "Lookbook",
+          "cls": "font-display text-[27px] font-extrabold tracking-tight",
+          "fontSize": 27,
+          "text": "Lookbook"
+        }
+      ],
+      "docOverflowX": 0,
+      "ariaState": {
+        "pressed": [
+          {
+            "label": "Combine into one outfit",
+            "pressed": "false"
+          },
+          {
+            "label": "All4",
+            "pressed": "true"
+          },
+          {
+            "label": "Tops4",
+            "pressed": "false"
+          },
+          {
+            "label": "Bottoms0",
+            "pressed": "false"
+          },
+          {
+            "label": "Dresses0",
+            "pressed": "false"
+          },
+          {
+            "label": "Outerwear0",
+            "pressed": "false"
+          },
+          {
+            "label": "Shoes0",
+            "pressed": "false"
+          },
+          {
+            "label": "Extras0",
+            "pressed": "false"
+          },
+          {
+            "label": "AI Stylist",
+            "pressed": "true"
+          },
+          {
+            "label": "Style it yourself",
+            "pressed": "false"
+          },
+          {
+            "label": "Casual",
+            "pressed": "true"
+          },
+          {
+            "label": "Work",
+            "pressed": "false"
+          },
+          {
+            "label": "Date",
+            "pressed": "false"
+          },
+          {
+            "label": "Gym",
+            "pressed": "false"
+          },
+          {
+            "label": "Party",
+            "pressed": "false"
+          },
+          {
+            "label": "Week",
+            "pressed": "true"
+          },
+          {
+            "label": "Month",
+            "pressed": "false"
+          },
+          {
+            "label": "History",
+            "pressed": "false"
+          }
+        ],
+        "current": [
+          {
+            "label": "Looks",
+            "current": "page"
+          }
+        ],
+        "labelledGroups": [
+          "Styling mode",
+          "Calendar view"
+        ]
+      }
+    },
+    "calendar": {
+      "controlsMeasured": 21,
+      "tapTargetsBelow44": [],
+      "overflowingViewport": [],
+      "textBelow11px": [],
+      "syneElements": [
+        {
+          "tag": "span",
+          "label": "Flowie",
+          "cls": "font-display text-[17px] font-extrabold tracking-tight",
+          "fontSize": 17,
+          "text": "Flowie"
+        },
+        {
+          "tag": "h1",
+          "label": "Calendar",
+          "cls": "font-display text-[27px] font-extrabold tracking-tight",
+          "fontSize": 27,
+          "text": "Calendar"
+        }
+      ],
+      "docOverflowX": 0,
+      "ariaState": {
+        "pressed": [
+          {
+            "label": "Combine into one outfit",
+            "pressed": "false"
+          },
+          {
+            "label": "All4",
+            "pressed": "true"
+          },
+          {
+            "label": "Tops4",
+            "pressed": "false"
+          },
+          {
+            "label": "Bottoms0",
+            "pressed": "false"
+          },
+          {
+            "label": "Dresses0",
+            "pressed": "false"
+          },
+          {
+            "label": "Outerwear0",
+            "pressed": "false"
+          },
+          {
+            "label": "Shoes0",
+            "pressed": "false"
+          },
+          {
+            "label": "Extras0",
+            "pressed": "false"
+          },
+          {
+            "label": "AI Stylist",
+            "pressed": "true"
+          },
+          {
+            "label": "Style it yourself",
+            "pressed": "false"
+          },
+          {
+            "label": "Casual",
+            "pressed": "true"
+          },
+          {
+            "label": "Work",
+            "pressed": "false"
+          },
+          {
+            "label": "Date",
+            "pressed": "false"
+          },
+          {
+            "label": "Gym",
+            "pressed": "false"
+          },
+          {
+            "label": "Party",
+            "pressed": "false"
+          },
+          {
+            "label": "Week",
+            "pressed": "true"
+          },
+          {
+            "label": "Month",
+            "pressed": "false"
+          },
+          {
+            "label": "History",
+            "pressed": "false"
+          }
+        ],
+        "current": [
+          {
+            "label": "Plan",
+            "current": "page"
+          }
+        ],
+        "labelledGroups": [
+          "Styling mode",
+          "Calendar view"
+        ]
+      }
+    }
+  }
+}

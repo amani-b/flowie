@@ -78,7 +78,7 @@ export default function AuthCallback() {
             <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-accsoft text-acc">
               <Loader2 className="h-8 w-8 animate-spin" />
             </span>
-            <h1 className="mt-6 font-display text-[24px] font-extrabold">Completing sign-in…</h1>
+            <h1 className="mt-6 text-[24px] font-extrabold">Completing sign-in…</h1>
             <p className="mt-2 text-center text-[13px] font-medium text-mut">
               Just a moment while we secure your closet.
             </p>
@@ -90,7 +90,7 @@ export default function AuthCallback() {
             <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-accsoft text-acc">
               <MailCheck className="h-8 w-8" />
             </span>
-            <h1 className="mt-6 font-display text-[24px] font-extrabold">Check your inbox</h1>
+            <h1 className="mt-6 text-[24px] font-extrabold">Check your inbox</h1>
             <p className="mt-2 max-w-[280px] text-center text-[13px] font-medium text-mut">
               We sent a confirmation link. Once confirmed, return here to complete sign-in.
             </p>
@@ -108,7 +108,7 @@ export default function AuthCallback() {
             <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-dangersoft text-danger">
               <MailCheck className="h-8 w-8" />
             </span>
-            <h1 className="mt-6 font-display text-[24px] font-extrabold">Sign-in issue</h1>
+            <h1 className="mt-6 text-[24px] font-extrabold">Sign-in issue</h1>
             <p className="mt-2 max-w-[280px] text-center text-[13px] font-medium text-mut">
               {errorMsg || "Something went wrong during authentication."}
             </p>

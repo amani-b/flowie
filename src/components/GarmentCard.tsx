@@ -1,8 +1,18 @@
+import { memo } from "react";
 import { motion } from "framer-motion";
 import type { Garment } from "../types";
 import GarmentPhoto from "./GarmentPhoto";
 
-export default function GarmentCard({
+/**
+ * Memoised deliberately: the grid maps over the whole closet, so without this
+ * every store mutation (a recon stage tick, another garment being patched)
+ * re-rendered every card in the list. `garment` is a stable object reference
+ * between mutations because the store patches by rebuilding only the record it
+ * touches — so the default shallow prop comparison is enough, provided the
+ * parent also passes a stable `onOpen` (it does; see the `useCallback` in
+ * Closet).
+ */
+function GarmentCard({
   garment,
   onOpen,
 }: {
@@ -42,7 +52,7 @@ export default function GarmentCard({
       </div>
       <div className="px-3 py-2.5">
         <p className="truncate text-[12.5px] font-extrabold">{garment.name}</p>
-        <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-mut">
+        <p className="mt-0.5 text-[11px] font-bold uppercase tracking-[0.14em] text-mut">
           {garment.category === "accessory" ? garment.kind ?? "extra" : garment.category}
           {" · "}
           {garment.colorFamily}
@@ -51,3 +61,5 @@ export default function GarmentCard({
     </motion.button>
   );
 }
+
+export default memo(GarmentCard);

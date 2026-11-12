@@ -19,10 +19,19 @@ import type {
   Units,
   WeatherNow,
 } from "../types";
-import { DEMO_OUTFITS, DEMO_WARDROBE } from "../lib/mock";
+import { DEMO_OUTFITS, getDemoWardrobe } from "../lib/mock";
+import { markStage } from "../lib/telemetry";
+import { haptic } from "../lib/native";
+import { enqueue, isActive, subscribe as subscribeJobs } from "../services/jobQueue";
+import {
+  lookupRecon,
+  putRecon,
+  reconCacheKey,
+} from "../services/reconCache";
+import { INTERRUPTED_ERROR, readInterruptedJobs } from "./jobsStore";
 import { fetchWeather } from "../services/weather";
 import { generateStyle } from "../services/stylist";
-import { primeRendering } from "../services/renderService";
+import { ensureRendering } from "../services/studioRender";
 import {
   appMode,
   enterDemoMode as demoEnter,
@@ -40,8 +49,24 @@ import {
   insertOutfitRow,
   upsertScheduleRow,
 } from "../services/dataService";
-import { OCCASION_META, uid } from "../lib/utils";
+import { OCCASION_META, uid, withTimeout } from "../lib/utils";
 import { supabase } from "../services/supabaseClient";
+import {
+  clearBlobs,
+  deleteBlobsFor,
+  pruneBlobs,
+  saveBlob,
+} from "../services/blobStore";
+import {
+  analyzeGarmentPhoto,
+  requestGarmentRecon,
+  RECON_SEED,
+  reconClassFor,
+  RECON_DAILY_BUDGET,
+  getReconDailyCount,
+  isStubBbox,
+} from "../services/garmentRecon";
+import { cropToBbox } from "../lib/crop";
 
 interface WeatherState {
   status: LoadStatus;
@@ -49,6 +74,9 @@ interface WeatherState {
 }
 
 type SyncStatus = "synced" | "pending" | "error";
+
+/* Retired: ClosetUpgradeState (bulk re-light rollout) — the recon lane
+ * runs once per garment at import; no batch upgrade concept remains. */
 
 interface SyncState {
   pendingGarments: Set<string>;
@@ -109,6 +137,21 @@ export interface AppStore {
   toast: ToastMsg | null;
 
   addGarment: (g: Omit<Garment, "id" | "createdAt">, photoDataUrl?: string) => Promise<void>;
+  /** Generate-and-cache the studio rendering for one garment (legacy backfill + retry). */
+  backfillRendering: (id: string) => void;
+  /**
+   * Manual (re)try for garment reconstruction (failed / never-ran).
+   * Needs a photo as input; skips when recon is cached or a job is in
+   * flight (one call per garment — quota guard). Failures return to
+   * "failed" with photo/SVG fallbacks.
+   */
+  retryRecon: (id: string) => void;
+  /**
+   * Wearer-set print flag (logos/graphics/text → Klein detail renderer).
+   * Clears any cached recon so the other renderer runs on demand —
+   * one extra quota call, same as a manual retry.
+   */
+  setGarmentPrint: (id: string, hasPrint: boolean) => void;
   removeGarment: (id: string) => void;
   restoreSamples: () => void;
   clearAllData: () => void;
@@ -152,7 +195,33 @@ const EMPTY_DATA = {
   generation: IDLE_GEN,
 };
 
-// Safe storage wrapper that catches localStorage quota errors
+// Safe storage wrapper that catches localStorage quota errors.
+//
+// Writes are DEBOUNCED (250 ms trailing). Zustand persists the whole snapshot
+// synchronously on EVERY `set`, and a recon batch or a progress tick mutates
+// the store repeatedly in quick succession — so the raw behaviour was a full
+// JSON.stringify of the closet per mutation. Coalescing bursts to one write per
+// 250 ms keeps the main thread free without changing what is persisted.
+//
+// The pending write is flushed on `pagehide` (the one event that reliably fires
+// on a mobile PWA/WebView kill, and the same event the interrupted-job handoff
+// already relies on). That matters more than the debounce itself: without a
+// flush, closing the tab inside the debounce window would silently drop the
+// user's last change.
+const WRITE_DEBOUNCE_MS = 250;
+
+/**
+ * Dev-time budget for the persisted snapshot (Phase 3 gate).
+ *
+ * 100 KB, matching the spec's DoD #4. The measured worst case after v13 is
+ * ~9 KB at 40 reconned garments, so this is a ~11× margin — the point is not
+ * to ride close to the line but to fail loudly the moment image bytes start
+ * leaking back in, which is a ~600× jump, not a gradual drift.
+ */
+const SNAPSHOT_BUDGET_BYTES = 102_400;
+
+const isDev = import.meta.env.DEV;
+
 const safeStorage = {
   getItem: (name: string) => {
     try {
@@ -164,16 +233,16 @@ const safeStorage = {
     }
   },
   setItem: (name: string, value: { state: unknown; version?: number }) => {
-    try {
-      localStorage.setItem(name, JSON.stringify(value));
-    } catch (e) {
-      // QuotaExceededError or other storage failure — degrade gracefully
-      console.error("localStorage.setItem failed — storage may be full:", e);
-      // Don't rethrow; let the app continue working in-memory
-    }
+    pendingWrites.set(name, value);
+    if (writeTimer !== null) clearTimeout(writeTimer);
+    writeTimer = setTimeout(() => {
+      writeTimer = null;
+      flushPendingWrites();
+    }, WRITE_DEBOUNCE_MS);
   },
   removeItem: (name: string) => {
     try {
+      pendingWrites.delete(name);
       localStorage.removeItem(name);
     } catch (e) {
       console.warn(`localStorage.removeItem("${name}") failed:`, e);
@@ -181,18 +250,94 @@ const safeStorage = {
   },
 };
 
+/** Latest snapshot per key, awaiting the debounce window. */
+const pendingWrites = new Map<string, { state: unknown; version?: number }>();
+let writeTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Write every pending snapshot now. Safe to call when nothing is pending. */
+export function flushPendingWrites(): void {
+  if (writeTimer !== null) {
+    clearTimeout(writeTimer);
+    writeTimer = null;
+  }
+  for (const [name, value] of pendingWrites) {
+    let payload: string;
+    try {
+      payload = JSON.stringify(value);
+    } catch (e) {
+      console.warn(`serialising "${name}" failed:`, e);
+      continue;
+    }
+    if (isDev) assertSnapshotBudget(name, payload);
+    try {
+      localStorage.setItem(name, payload);
+    } catch (e) {
+      // QuotaExceededError or other storage failure — degrade gracefully.
+      // Don't rethrow; let the app continue working in-memory.
+      console.error("localStorage.setItem failed — storage may be full:", e);
+    }
+  }
+  pendingWrites.clear();
+}
+
+/**
+ * Dev-only guard: warn loudly if image bytes have crept back into the snapshot.
+ *
+ * Two separate signals, because they fail differently:
+ *   - `data:image` present → the encoding regression. This is the one that
+ *     matters; it is what took the snapshot to 5.8 MB and it trips the moment
+ *     a `partialize`/strip rule is loosened.
+ *   - total size over budget → the accumulation regression, e.g. a new heavy
+ *     field on every garment.
+ *
+ * `console.warn`, not a throw: a dev-time integrity check that crashes the app
+ * is worse than the leak it reports, and the same store object is used by the
+ * test suite where this runs under `jsdom` with a real localStorage.
+ */
+export function assertSnapshotBudget(name: string, payload: string): void {
+  const bytes = new TextEncoder().encode(payload).length;
+  const leakIndex = payload.indexOf("data:image");
+  if (leakIndex !== -1) {
+    const at = payload.slice(Math.max(0, leakIndex - 60), leakIndex + 40);
+    console.warn(
+      `[fitflow-store] image bytes leaked into the persisted snapshot ` +
+        `(found "data:image"). Phase 3 requires http(s) refs + IDB keys only. ` +
+        `Context: …${at}…`
+    );
+  }
+  if (bytes > SNAPSHOT_BUDGET_BYTES) {
+    console.warn(
+      `[fitflow-store] snapshot "${name}" is ${bytes} bytes, over the ` +
+        `${SNAPSHOT_BUDGET_BYTES}-byte budget (${(bytes / 1024).toFixed(1)} KB). ` +
+        `Check partialize/stripImageBytes for a field carrying image bytes.`
+    );
+  }
+}
+
+if (typeof window !== "undefined") {
+  // `pagehide` covers tab close / app switch / WebView kill. `visibilitychange`
+  // is the belt-and-braces path for mobile browsers that background without a
+  // pagehide. Both are cheap and idempotent.
+  window.addEventListener("pagehide", flushPendingWrites);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushPendingWrites();
+  });
+}
+
 export function applyThemeToDom(theme: ThemeMode) {
   document.documentElement.classList.toggle("dark", theme === "dark");
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute("content", theme === "dark" ? "#0C110D" : "#EDF1EC");
 }
 
+/**
+ * Short UI feedback on state-changing taps. Delegates to the native haptics
+ * layer (`lib/native.ts`), which is a real haptic tick on device and falls back
+ * to the original `navigator.vibrate` in the browser. Fire-and-forget —
+ * haptics are never worth blocking a store mutation on.
+ */
 function buzz(ms = 8) {
-  try {
-    navigator.vibrate?.(ms);
-  } catch {
-    /* no haptics — fine */
-  }
+  void haptic(ms);
 }
 
 let bootStarted = false;
@@ -245,6 +390,347 @@ function mergeSchedules(current: Schedule[], fetched: Schedule[]): Schedule[] {
   return [...current.filter((s) => !fetchedIds.has(s.id)), ...fetched];
 }
 
+/* ------------------- garment-recon background jobs ------------------ */
+// Single reconstruction lane (replaces the retired composite / enhance /
+// flat-lay chains). One remote call per garment at import time via the
+// secret-holding `recon-garment` Edge Function (never from the browser
+// bundle). Serialised so a bulk upload can't burst the free ZeroGPU quota.
+// Failures land on `reconStatus: "failed"` — photo + SVG skeleton untouched.
+//
+// Phase 2: execution left this file. `services/jobQueue.ts` owns the serial
+// lane, cancellation and retry; `services/reconCache.ts` owns content-
+// addressed results. What stays here is POLICY — whether a job is allowed to
+// exist at all (category gate, no cached result, photo present) and how its
+// outcome lands on the garment record. The old `reconInFlight` Set and
+// `reconChain` promise are deliberately gone: `isActive(id)` reads the queue's
+// real state instead of a second bookkeeping copy that could drift.
+
+/** Patch one garment (and its look/today snapshot copies) by id. */
+function applyReconPatch(
+  s: { garments: Garment[]; looks: SavedLook[]; today: StyleResult | null },
+  id: string,
+  patch: Partial<Garment>
+): {
+  garments: Garment[];
+  looks: SavedLook[];
+  today: StyleResult | null;
+} {
+  const apply = (g: Garment): Garment => (g.id === id ? { ...g, ...patch } : g);
+  const fixOutfit = (o: Record<string, Garment | undefined>) => {
+    const next = { ...o };
+    for (const k of Object.keys(next)) {
+      const piece = next[k];
+      if (piece && piece.id === id) next[k] = apply(piece);
+    }
+    return next;
+  };
+  return {
+    garments: s.garments.map(apply),
+    looks: s.looks.map((l) => ({
+      ...l,
+      outfit: fixOutfit(l.outfit as Record<string, Garment | undefined>) as typeof l.outfit,
+    })),
+    today: s.today
+      ? {
+          ...s.today,
+          outfit: fixOutfit(s.today.outfit as Record<string, Garment | undefined>) as typeof s.today.outfit,
+        }
+      : s.today,
+  };
+}
+
+/**
+ * Drop `data:` image bytes from a record bound for `localStorage`, keeping
+ * remote references.
+ *
+ * Why this exists: the persisted snapshot must contain no `data:image` bytes
+ * (DoD #4). Two fields were carrying them:
+ *   - `reconUrl` — a ~140 KB recon PNG data URL, the dominant term (measured
+ *     at 5.8 MB for 40 reconned garments, 57× the budget);
+ *   - `rendering` — a ~5 KB inline SVG data URL. Small per item, but it is
+ *     what pushes the *no-recon* closet over budget (225 KB @ 40 garments).
+ *
+ * Both are recoverable without them: `recon` bytes live in IndexedDB under the
+ * garment id (and again by content hash in the recon cache), and the SVG
+ * `rendering` is regenerated deterministically by `ensureRendering`/
+ * `renderingFor` from the record's own fields. So stripping them is lossless
+ * for display and merely removes a redundant copy.
+ *
+ * `http(s)` URLs are KEPT — for `reconUrl`, `rendering` AND `photo`. That is not
+ * a convenience: in live mode a garment synced from Postgres arrives with
+ * `photo = wardrobe_items.image_url` (see `dataService.rowToGarment`), i.e. a
+ * Storage URL. Stripping every `photo` unconditionally destroyed the only copy
+ * the client has of that reference — the bytes were `data:` (correctly dropped
+ * at upload), but the URL pointing at them is the canonical remote handle, and
+ * `Closet`'s "Original photo" disclosure reads `g.photo` directly. Keeping it
+ * costs ~60 bytes and avoids a needless re-fetch.
+ *
+ * The rule is therefore about the ENCODING, not the field name: anything
+ * `data:` goes, anything `http(s):` stays.
+ */
+function stripImageBytes<T>(g: T): T {
+  if (!g || typeof g !== "object") return g;
+  const next: Record<string, unknown> = { ...(g as Record<string, unknown>) };
+  // `photo` is the local import source; it is a data URL in demo/offline mode
+  // and an http(s) Storage URL in live mode.
+  if (typeof next.photo === "string" && next.photo.startsWith("data:")) {
+    next.photo = undefined;
+  }
+  if (typeof next.reconUrl === "string" && next.reconUrl.startsWith("data:")) {
+    // `reconStatus` stays "ready": the render genuinely exists, it is in IDB.
+    // Clearing the status would make the tile look like it never succeeded and
+    // `runReconJob` would then consider it eligible for a fresh remote call —
+    // the exact quota waste Phase 2 removed.
+    next.reconUrl = undefined;
+  }
+  if (typeof next.rendering === "string" && next.rendering.startsWith("data:")) {
+    next.rendering = undefined;
+  }
+  return next as T;
+}
+
+/** `stripImageBytes` across an outfit map (looks / today snapshots). */
+function stripOutfitImages<T>(o: T): T {
+  if (!o || typeof o !== "object") return o;
+  const src = o as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  for (const k of Object.keys(src)) {
+    const piece = src[k];
+    next[k] = piece && typeof piece === "object" ? stripImageBytes(piece) : piece;
+  }
+  return next as T;
+}
+
+function runReconJob(id: string): void {
+  const snapshot = useAppStore.getState().garments.find((g) => g.id === id);
+  // No source to reconstruct (manual entry), or recon already cached —
+  // never re-generate on view. Retry path re-enters via retryRecon.
+  if (!snapshot || snapshot.reconUrl) return;
+  if (!snapshot.photo) return;
+  // One job per garment, enforced by the queue itself (not a local Set).
+  if (isActive(id)) return;
+
+  enqueue({
+    id,
+    kind: "recon",
+    label: snapshot.name || "Garment",
+    run: async ({ signal, onStage }) => {
+      try {
+        const current = useAppStore.getState().garments.find((g) => g.id === id);
+        if (!current || !current.photo) return;
+
+        // Analyzer gate BEFORE any cache or network work: shoes/accessories
+        // are photo-only (no recon model) — photo + SVG skeleton stay the
+        // finish, zero noise, zero quota. No stage text: nothing is happening.
+        // The analyzer is async since accuracy track A3 (Gemini bbox): a
+        // failure or missing key falls back inside it to the full-frame
+        // stub, so this never rejects for analyzer reasons.
+        const analysis = await analyzeGarmentPhoto({
+          garmentId: id,
+          category: current.category,
+          name: current.name,
+          photoDataUrl: current.photo,
+          signal,
+        });
+        if (!analysis) return;
+        if (signal.aborted) return;
+
+        // Hybrid router: print garments → Klein detail renderer, plain →
+        // TryOffDiff (Track 2 verdict — Klein keeps graphics but invents
+        // details on plain pieces, so the wearer decides via hasPrint).
+        const renderer: "klein" | "tryoff" = current.hasPrint ? "klein" : "tryoff";
+
+        // Content-addressed lookup. A hit means these exact source bytes
+        // already produced a render for this renderer/class/seed — reuse it
+        // and spend ZERO remote calls. That is what makes re-import free.
+        const key = reconCacheKey({
+          sha256: current.photoSha256,
+          bytes: current.photo.length,
+          renderer,
+          reconClass: analysis.reconClass,
+          seed: RECON_SEED,
+        });
+        onStage("Checking for a cached render…");
+        const cached = await lookupRecon(key);
+        if (signal.aborted) return;
+        if (cached) {
+          markStage("recon:cached", `garment=${id} renderer=${renderer}`);
+          try {
+            saveBlob(id, "recon", cached);
+          } catch {
+            /* best-effort */
+          }
+          useAppStore.setState((s) => ({
+            ...applyReconPatch(s, id, {
+              reconUrl: cached,
+              reconStatus: "ready" as const,
+              reconError: undefined,
+              reconRenderer: renderer,
+            }),
+          }));
+          onStage("Reused a cached render");
+          return;
+        }
+
+        // Only now is a real call certain, so only now mark pending. Marking
+        // earlier is what made cache hits and cancels flash a bogus spinner.
+        useAppStore.setState((s) => ({
+          ...applyReconPatch(s, id, {
+            reconStatus: "pending" as const,
+            reconError: undefined,
+          }),
+        }));
+        markStage("recon:request", `garment=${id} renderer=${renderer}`);
+        // Crop to the analyzed garment before spending a call — the
+        // crop-first contract the edge function documents, and what the
+        // offline harness has always done before calling a Space. The
+        // stub's full-frame box is a no-op trim, so only a real bbox is
+        // worth the decode+encode; any crop failure sends the full photo,
+        // exactly what the stub era did. The cache key stays the ORIGINAL
+        // photo's hash: the crop is derived from it, not a new identity.
+        const photoForCall = isStubBbox(analysis.boundingBox)
+          ? current.photo
+          : ((await cropToBbox(current.photo, analysis.boundingBox)) ?? current.photo);
+        const outcome = await requestGarmentRecon({
+          garmentId: id,
+          reconClass: analysis.reconClass,
+          photoDataUrl: photoForCall,
+          renderer,
+          name: current.name,
+          // Additive Phase 2 hooks: queue cancellation + honest progress.
+          signal,
+          onStage,
+        });
+        markStage("recon:responded", `garment=${id} status=${outcome.status}`);
+        if (outcome.status === "ready") {
+          const url = outcome.reconDataUrl;
+          // Cache before persisting: the render is now reusable *by content*,
+          // which is what makes a later re-import of the same photo free.
+          putRecon(key, url);
+          try {
+            saveBlob(id, "recon", url);
+          } catch {
+            /* best-effort */
+          }
+          useAppStore.setState((s) => ({
+            ...applyReconPatch(s, id, {
+              reconUrl: url,
+              reconStatus: "ready" as const,
+              reconError: undefined,
+              reconRenderer: renderer,
+            }),
+          }));
+        } else if (outcome.status === "failed") {
+          // API fail / timeout / function not deployed: don't block anything —
+          // save for retry from the Closet detail sheet or the banner.
+          console.warn("garment-recon deferred:", outcome.error);
+          useAppStore.setState((s) => ({
+            ...applyReconPatch(s, id, {
+              reconStatus: "failed" as const,
+              reconError: outcome.error,
+            }),
+          }));
+        } else {
+          // "skipped" — cancelled / mock-mode / budget spent / no source.
+          // Clear the pending mark so the tile rests on photo/SVG with no
+          // pill. A cancel in particular is a user action, never a failure.
+          useAppStore.setState((s) => ({
+            ...applyReconPatch(s, id, { reconStatus: undefined, reconError: undefined }),
+          }));
+        }
+      } catch (e) {
+        // The queue catches whatever escapes `run`, but only the garment
+        // record knows what "pending" was supposed to become. Keep it honest.
+        console.warn("garment-recon deferred:", e);
+        useAppStore.setState((s) => ({
+          ...applyReconPatch(s, id, {
+            reconStatus: "failed" as const,
+            reconError: e instanceof Error ? e.message : String(e),
+          }),
+        }));
+      }
+    },
+  });
+}
+
+/* Retired: runCompositeWorker (ISNet segmentation) — replaced by runReconJob. */
+
+/* Retired: studio-enhance chain (FLUX-schnell re-light) — replaced by runReconJob. */
+
+/* Retired: flat-lay chain (whole-image try-off caller) — replaced by runReconJob. */
+
+/* Retired: closet-upgrade orchestrator (bulk re-light rollout).
+ * The recon lane runs once per garment at import; failures retry per
+ * garment from the Closet detail sheet. No batch concept remains. */
+
+/**
+ * Reconcile IndexedDB with the current closet at boot — WITHOUT loading bytes.
+ *
+ * What this deliberately no longer does: merge every garment's photo + recon
+ * back into the store. That was O(closet) IO before first paint and re-inflated
+ * megabytes of image data into the very state the persister walks on every
+ * mutation, which is the RC-4 cost Phase 3 exists to remove. Tiles now resolve
+ * their own image on demand (`services/imageCache.ts`), so boot has no reason
+ * to know any garment's bytes.
+ *
+ * What remains is the part that is genuinely boot-shaped:
+ *   - BACKFILL: a record that still holds an in-state `data:` blob (an import
+ *     that happened before a reload, or a legacy snapshot) gets it written to
+ *     IDB, so the durable copy exists before the in-memory one is dropped.
+ *   - PRUNE: blobs whose garment is gone are deleted, so the store cannot grow
+ *     without bound across add/remove cycles.
+ *
+ * Never rejects: a missing blob just leaves the photo/SVG fallback showing.
+ */
+async function reconcileBlobsAtBoot(): Promise<void> {
+  try {
+    const s = useAppStore.getState();
+    // Backfill IDB from any in-state data: blobs, then prune the orphans.
+    for (const g of s.garments) {
+      if (g.photo?.startsWith("data:")) saveBlob(g.id, "photo", g.photo);
+      if (g.reconUrl?.startsWith("data:")) saveBlob(g.id, "recon", g.reconUrl);
+    }
+    pruneBlobs(new Set(s.garments.map((g) => g.id)));
+  } catch {
+    /* best-effort */
+  }
+}
+
+/* Retired: pumpClosetUpgrade — no batch upgrade concept remains. */
+
+/* ---------------- cancel → garment reconciliation (once) --------------- */
+//
+// A job cancelled while still QUEUED never enters `run`, so nothing in the run
+// body clears the garment's `pending` mark, and the tile would keep claiming
+// "Reconstructing…" for work that will now never happen. Cancellation is a
+// queue-level action, so the queue's own settle event is the right place to
+// notice it — this also covers any future caller that cancels directly.
+//
+// Running-job cancels are cleared by the run body itself (a cancelled request
+// resolves as `skipped`), and this handler is idempotent, so the two paths
+// cannot fight: it only acts while the record still says "pending".
+
+let cancelReconcileInstalled = false;
+
+function installCancelReconciliation(): void {
+  if (cancelReconcileInstalled) return;
+  cancelReconcileInstalled = true;
+  subscribeJobs((e) => {
+    if (e.type !== "settled") return;
+    if (e.job.status !== "cancelled" || e.job.kind !== "recon") return;
+    const g = useAppStore.getState().garments.find((x) => x.id === e.job.id);
+    if (!g || g.reconUrl || g.reconStatus !== "pending") return;
+    useAppStore.setState((s) => ({
+      ...applyReconPatch(s, e.job.id, {
+        reconStatus: undefined,
+        reconError: undefined,
+      }),
+    }));
+  });
+}
+
+if (typeof window !== "undefined") installCancelReconciliation();
+
 export const useAppStore = create<AppStore>()(
   persist(
     (set, get) => ({
@@ -271,17 +757,26 @@ export const useAppStore = create<AppStore>()(
           set({ authStatus: "signedOut" });
         }
         // Live mode: follow token refresh / OAuth redirect / remote sign-out.
-        unsubAuth?.();
-        unsubAuth = subscribeAuth((u) => {
-          if (u) {
-            get().completeAuth(u);
-            return;
-          }
-          const current = get().user;
-          if (current && !current.isDemo) {
-            set({ user: null, ownerId: null, authStatus: "signedOut", ...EMPTY_DATA });
-          }
-        });
+        // Guarded: if subscribing throws, the app must still leave "booting"
+        // (an eternal Splash looks exactly like a blank screen) and a later
+        // remount must be allowed to retry.
+        try {
+          unsubAuth?.();
+          unsubAuth = subscribeAuth((u) => {
+            if (u) {
+              get().completeAuth(u);
+              return;
+            }
+            const current = get().user;
+            if (current && !current.isDemo) {
+              set({ user: null, ownerId: null, authStatus: "signedOut", ...EMPTY_DATA });
+            }
+          });
+        } catch {
+          // Auth subscription failed (offline tracker, blocked SDK): the
+          // closet still works on-device — never strand boot on "booting".
+          if (get().authStatus === "booting") set({ authStatus: "signedOut" });
+        }
         
         // Silent background sweep for any pending/error items. Never toasts:
         // the closet works fully on-device and cloud sync is best-effort.
@@ -318,6 +813,48 @@ export const useAppStore = create<AppStore>()(
         retryTimer = setTimeout(() => {
           void get().retrySync().catch(() => {});
         }, 4000);
+        // Blob sources first (lean snapshots omit them): IDB reads are
+        // milliseconds-local, and photo-gated resume below needs them.
+        // Tiles already painted from photo/SVG — this never blocks display.
+        // Phase 0 timing: this is the boot hotspot (RC-4) — it loads ALL IDB
+        // blobs up front. Measure before Phase 3 replaces it with lazy
+        // per-tile resolution.
+        markStage("boot:rehydrate-start");
+        try {
+          await reconcileBlobsAtBoot();
+        } catch {
+          /* rehydrate is best-effort */
+        }
+        markStage("boot:rehydrate-end");
+        // Resume recon jobs interrupted by a reload. The queue recorded what
+        // was genuinely in flight when the page went away (jobsStore listens
+        // for `pagehide`), so this is evidence-based instead of guessed:
+        // those garments are marked failed with an honest reason — the job
+        // really did not finish — and at most ONE, the most recent, is
+        // resumed. A stale "pending" with no queue record is cleared rather
+        // than turning into an unrequested burst against the free quota.
+        try {
+          const interrupted = readInterruptedJobs();
+          const toResume = interrupted?.ids[0];
+          for (const g of get().garments) {
+            if (g.reconStatus !== "pending" || g.reconUrl) continue;
+            set((s) => ({
+              ...applyReconPatch(
+                s,
+                g.id,
+                interrupted?.ids.includes(g.id)
+                  ? { reconStatus: "failed" as const, reconError: INTERRUPTED_ERROR }
+                  : { reconStatus: undefined, reconError: undefined }
+              ),
+            }));
+          }
+          if (toResume) {
+            const g = get().garments.find((x) => x.id === toResume);
+            if (g?.photo && !g.reconUrl) runReconJob(toResume);
+          }
+        } catch {
+          /* resume is best-effort */
+        }
       },
 
       completeAuth: (user) => {
@@ -326,7 +863,7 @@ export const useAppStore = create<AppStore>()(
 
         if (user.isDemo) {
           // The demo user arrives pre-dressed: seed the mock dataset once.
-          if (state.garments.length === 0) patch.garments = DEMO_WARDROBE;
+          if (state.garments.length === 0) patch.garments = getDemoWardrobe();
           if (state.looks.length === 0) patch.looks = DEMO_OUTFITS;
           patch.ownerId = user.id;
           patch.onboardedUsers = Array.from(
@@ -384,6 +921,13 @@ export const useAppStore = create<AppStore>()(
               looks: mergeKeptLocal(s.looks, looks),
               schedules: mergeSchedules(s.schedules, schedules),
             });
+            // Cloud rows may carry photo URLs the lean snapshot lacks —
+            // merge stored composites back so tiles upgrade instantly.
+            try {
+              await reconcileBlobsAtBoot();
+            } catch {
+              /* best-effort */
+            }
           }
         } catch (error: any) {
           console.error("Error in hydrateFromCloud:", error?.message ?? error, error?.status);
@@ -408,6 +952,11 @@ export const useAppStore = create<AppStore>()(
                 looks: mergeKeptLocal(s.looks, retryData.looks),
                 schedules: mergeSchedules(s.schedules, schedules),
               });
+              try {
+                await reconcileBlobsAtBoot();
+              } catch {
+                /* best-effort */
+              }
             }
             return;
           } catch (retryError: any) {
@@ -505,10 +1054,10 @@ export const useAppStore = create<AppStore>()(
         void _incomingId;
         void _incomingAt;
         void _incomingSync;
-        const id = crypto.randomUUID();
+        const id = uid("uuid");
 
         // Normalize incoming garment to ensure colors/pattern are always present
-        const normalizedGarment: Garment = {
+        const normalizedGarment: Garment = ensureRendering({
           ...rest as Omit<Garment, "id" | "createdAt">,
           id,
           colors: rest.colors?.length ? rest.colors : [rest.color!],
@@ -516,7 +1065,7 @@ export const useAppStore = create<AppStore>()(
           photo: photoDataUrl ?? rest.photo,
           createdAt: Date.now(),
           syncStatus: "pending",
-        };
+        });
         
         set((s) => ({
           garments: [normalizedGarment, ...s.garments],
@@ -525,12 +1074,36 @@ export const useAppStore = create<AppStore>()(
             pendingGarments: new Set(toSet(s._syncState.pendingGarments)).add(id),
           }
         }));
+        // Stash the source photo in IndexedDB (fire-and-forget): the lean
+        // persist snapshot omits it, and this is what lets composites
+        // (re)build after a reload without re-uploading.
+        if (normalizedGarment.photo?.startsWith("data:")) {
+          try {
+            saveBlob(id, "photo", normalizedGarment.photo);
+          } catch {
+            /* best-effort */
+          }
+        }
 
-        // Warm the generated studio-rendering cache now so the new piece
-        // shows its rendering (not a fallback) the moment Studio opens.
-        // Fire-and-forget: never blocks the save or cloud sync below.
-        primeRendering(normalizedGarment);
-
+        // The studio rendering was already generated + cached on the record
+        // above (sync, infallible) — nothing to warm, nothing to await.
+        // Garment reconstruction builds async alongside it: save first
+        // (never block the upload on a remote call). The original photo
+        // stays untouched; GarmentPhoto shows photo/SVG until recon lands,
+        // then swaps automatically. The upload itself never awaits any of it.
+        if (normalizedGarment.photo && !normalizedGarment.reconUrl) {
+          set((s) => ({
+            garments: s.garments.map((garment) =>
+              garment.id === id
+                ? {
+                    ...garment,
+                    reconStatus: "pending" as const,
+                  }
+                : garment
+            ),
+          }));
+          runReconJob(id);
+        }
         const user = get().user;
         if (!user || user.isDemo) {
           // Demo/mock mode: on-device only — nothing to sync.
@@ -548,8 +1121,15 @@ export const useAppStore = create<AppStore>()(
         }
 
         // Live mode: attempt cloud sync (silent on failure — stays on-device).
+        // Bounded: Supabase-JS has no default timeout, so a hung upload
+        // used to strand the record in "pending" forever. Timing out lands
+        // it on "error" where the silent retry sweep picks it up later.
         try {
-          await insertGarmentRow(user.id, normalizedGarment);
+          await withTimeout(
+            insertGarmentRow(user.id, normalizedGarment),
+            30_000,
+            "Cloud save"
+          );
           set((s) => ({
             garments: s.garments.map(garment =>
               garment.id === id ? { ...garment, syncStatus: "synced" as const } : garment
@@ -574,10 +1154,84 @@ export const useAppStore = create<AppStore>()(
           }));
         }
       },
+      backfillRendering: (id) => {
+        // One-shot generate-and-cache for records that predate renderings.
+        // Looks hold snapshot copies, so refresh those too.
+        const apply = (g: Garment): Garment =>
+          g.id === id ? ensureRendering({ ...g }) : g;
+        const fixOutfit = (o: Record<string, Garment | undefined>) => {
+          const next = { ...o };
+          for (const k of Object.keys(next)) {
+            const piece = next[k];
+            if (piece && piece.id === id) next[k] = ensureRendering({ ...piece });
+          }
+          return next;
+        };
+        set((s) => ({
+          garments: s.garments.map(apply),
+          looks: s.looks.map((l) => ({ ...l, outfit: fixOutfit(l.outfit as Record<string, Garment | undefined>) as typeof l.outfit })),
+          today: s.today
+            ? { ...s.today, outfit: fixOutfit(s.today.outfit as Record<string, Garment | undefined>) as typeof s.today.outfit }
+            : s.today,
+        }));
+      },
+      retryRecon: (id) => {
+        // Manual retry for garment reconstruction (failed / never-ran).
+        // Needs a photo as input; skips when recon is cached or a job is
+        // in flight (one call per garment — quota guard). Pre-checks with
+        // notices: photo-only categories (shoes/extras have no recon model)
+        // and spent daily budget. Failures return to "failed" with
+        // photo/SVG fallbacks.
+        const g = get().garments.find((x) => x.id === id);
+        if (!g || g.reconUrl || isActive(id)) return;
+        if (!g.photo) return;
+        if (!reconClassFor(g.category)) {
+          get().notify("Photo is the finish for shoes & extras", "err");
+          return;
+        }
+        if (getReconDailyCount() >= RECON_DAILY_BUDGET) {
+          get().notify("Today's free recon budget is spent — try tomorrow", "err");
+          return;
+        }
+        set((s) => ({
+          garments: s.garments.map((x) =>
+            x.id === id ? { ...x, reconStatus: "pending" as const } : x
+          ),
+        }));
+        runReconJob(id);
+      },
+      setGarmentPrint: (id, hasPrint) => {
+        // Wearer-set renderer signal (logos/graphics/text → Klein).
+        // Clears any cached recon so the other renderer runs on demand;
+        // kicks a job immediately when a photo is present (same quota
+        // cost as a manual retry). No-op while a job is in flight — the
+        // flag still applies to the next run.
+        set((s) => ({
+          ...applyReconPatch(s, id, {
+            hasPrint,
+            reconUrl: undefined,
+            reconStatus: undefined,
+            reconError: undefined,
+            reconRenderer: undefined,
+          }),
+        }));
+        const g = get().garments.find((x) => x.id === id);
+        if (g?.photo && !isActive(id)) runReconJob(id);
+      },
+      /* ---------------- Phase 5 closet upgrade (opt-in) --------------- */
+      /* Retired: start/pause/cancel/dismissClosetUpgrade (bulk re-light
+       * rollout) — recon runs once per garment at import; per-garment
+       * retryRecon covers failures. */
       removeGarment: (id) => {
         const user = get().user;
         // Get userId for storage cleanup before removing from state
         const userId = user?.id;
+        // Drop stored blobs for the garment.
+        try {
+          deleteBlobsFor(id);
+        } catch {
+          /* best-effort */
+        }
         set((s) => ({
           garments: s.garments.filter((g) => g.id !== id),
           _syncState: {
@@ -594,12 +1248,17 @@ export const useAppStore = create<AppStore>()(
         const have = new Set(get().garments.map((g) => g.id));
         const merged = [
           ...get().garments,
-          ...DEMO_WARDROBE.filter((g) => !have.has(g.id)),
+          ...getDemoWardrobe().filter((g) => !have.has(g.id)),
         ];
         set({ garments: merged });
         get().notify("Sample closet loaded");
       },
       clearAllData: () => {
+        try {
+          clearBlobs();
+        } catch {
+          /* best-effort */
+        }
         set({ garments: [], looks: [], today: null, generation: IDLE_GEN, stylePrefs: null });
         get().notify("Local data erased");
       },
@@ -656,7 +1315,7 @@ export const useAppStore = create<AppStore>()(
       saveLook: async (result, name) => {
         const wx = get().weather.data;
         // Generate stable UUID upfront for sync consistency
-        const id = crypto.randomUUID();
+        const id = uid("uuid");
         const look: SavedLook = {
           id,
           name:
@@ -757,7 +1416,7 @@ export const useAppStore = create<AppStore>()(
 
       scheduleLook: async (date, lookId) => {
         // Generate stable UUID for the schedule row
-        const id = crypto.randomUUID();
+        const id = uid("uuid");
         const user = get().user;
         
         // Optimistic local update first
@@ -919,8 +1578,8 @@ export const useAppStore = create<AppStore>()(
       clearToast: () => set({ toast: null }),
     }),
     {
-      name: "fitflow-store",
-      version: 5,
+        name: "fitflow-store",
+        version: 13,
       storage: safeStorage,
       // Rehydrated _syncState arrives as string[] (see partialize); restore
       // Sets so every selector/mutator can treat them uniformly.
@@ -928,9 +1587,31 @@ export const useAppStore = create<AppStore>()(
         const p = (persisted ?? {}) as unknown as Record<string, unknown>;
         const c = (current ?? {}) as unknown as Record<string, unknown>;
         const sync = (p._syncState ?? {}) as Record<string, unknown>;
+        // Validate shapes before spreading: a corrupt snapshot (bad tab,
+        // non-array garments, trashed queues) used to throw at render time
+        // and erase the whole app via the top boundary. Anything invalid
+        // falls back to the fresh-install default for that slice.
+        const VALID_TABS = ["home", "closet", "studio", "looks", "calendar"];
+        const tab =
+          typeof p.tab === "string" && VALID_TABS.includes(p.tab)
+            ? p.tab
+            : c.tab;
+        const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+        const garments = asArray(p.garments).filter(
+          (g): g is Record<string, unknown> =>
+            !!g && typeof g === "object" && typeof (g as { id?: unknown }).id === "string"
+        );
         return {
           ...(c as object),
           ...(p as object),
+          tab,
+          garments,
+          looks: asArray(p.looks),
+          schedules: asArray(p.schedules),
+          onboardedUsers: asArray(p.onboardedUsers),
+          // Retired slices never rehydrate: closetUpgrade (bulk rollout),
+          // studioComposite/studioRenderUrl/studioFlatLay (old pipeline).
+          // Garments carrying them are scrubbed in the v12 migration below.
           _syncState: {
             pendingGarments: toSet(sync.pendingGarments),
             pendingLooks: toSet(sync.pendingLooks),
@@ -941,18 +1622,21 @@ export const useAppStore = create<AppStore>()(
       },
       migrate: (persisted, version) => {
         // v1 (Phase 0) → v2: keep user data, add new session fields.
-        const state = (persisted ?? {}) as Record<string, unknown>;
+        // Falls through (no early return): a v1 snapshot must still pass
+        // through every later migration or records arrive missing fields
+        // (e.g. `colors`) that render-time code used to throw on.
+        let state = (persisted ?? {}) as Record<string, unknown>;
         if (version < 2) {
-          return {
+          state = {
             ...state,
             ownerId: null,
             onboardedUsers: [],
             stylePrefs: null,
-          } as never;
+          };
         }
         // v2 → v3: backfill colors/pattern fields on garments for backward compatibility
         if (version < 3) {
-          const newState = {
+          state = {
             ...state,
             garments: ((state as any).garments ?? []).map((g: any) => ({
               ...g,
@@ -971,11 +1655,10 @@ export const useAppStore = create<AppStore>()(
               },
             })),
           };
-          return newState as never;
         }
         // v3 → v4: add schedules array and tags field to looks
         if (version < 4) {
-          const newState = {
+          state = {
             ...state,
             schedules: [] as Schedule[],
             looks: ((state as any).looks ?? []).map((look: any) => ({
@@ -983,7 +1666,6 @@ export const useAppStore = create<AppStore>()(
               tags: look.tags ?? [],
             })),
           };
-          return newState as never;
         }
         // v4 → v5: scrub sync queues — drop non-uuid legacy ids and ids for
         // items that no longer exist; mark everything else synced on-device.
@@ -1003,7 +1685,7 @@ export const useAppStore = create<AppStore>()(
             lIds
           );
           const queued = new Set([...cleanGarments, ...cleanLooks]);
-          return {
+          state = {
             ...state,
             garments: garments.map((g: any) => ({
               ...g,
@@ -1019,17 +1701,260 @@ export const useAppStore = create<AppStore>()(
               errorGarments: [],
               errorLooks: [],
             },
-          } as never;
+          };
+        }
+        // v5 → v6: generate-and-cache studio renderings on every garment,
+        // including snapshot copies inside saved looks and today's outfit.
+        // Records without one predate the renderer — backfill, don't drop.
+        if (version < 6) {
+          const fixG = (g: any) => {
+            try {
+              return ensureRendering({ ...g });
+            } catch {
+              return { ...g, renderStatus: "failed" as const };
+            }
+          };
+          const fixOutfit = (o: any) => {
+            if (!o || typeof o !== "object") return o;
+            const next = { ...o };
+            for (const k of Object.keys(next)) {
+              if (next[k]?.id) next[k] = fixG(next[k]);
+            }
+            return next;
+          };
+          state = {
+            ...state,
+            garments: ((state as any).garments ?? []).map(fixG),
+            looks: ((state as any).looks ?? []).map((l: any) => ({
+              ...l,
+              outfit: fixOutfit(l.outfit),
+            })),
+            today: (state as any).today
+              ? { ...(state as any).today, outfit: fixOutfit((state as any).today.outfit) }
+              : (state as any).today,
+          };
+        }
+        // v6 → v7: studio-composite is garment-local only. Strip composites
+        // cached inside look/today snapshots (quota hygiene + a persisted
+        // "pending" there could never resolve); the SVG rendering fallback
+        // stays on every snapshot. Live garments are untouched — boot
+        // resumes any genuinely pending job.
+        if (version < 7) {
+          const stripSnap = (g: any) => {
+            if (!g || typeof g !== "object") return g;
+            const { studioComposite: _c, studioCompositeStatus: _s, ...rest } = g;
+            void _c;
+            void _s;
+            return rest;
+          };
+          const stripOutfit = (o: any) => {
+            if (!o || typeof o !== "object") return o;
+            const next = { ...o };
+            for (const k of Object.keys(next)) next[k] = stripSnap(next[k]);
+            return next;
+          };
+          state = {
+            ...state,
+            looks: ((state as any).looks ?? []).map((l: any) => ({
+              ...l,
+              outfit: stripOutfit(l.outfit),
+            })),
+            today: (state as any).today
+              ? { ...(state as any).today, outfit: stripOutfit((state as any).today.outfit) }
+              : (state as any).today,
+          };
+        }
+        // v7 → v8 (Phase 4): studio_render_url is garment-local like the
+        // composite — a persisted "pending" inside snapshots could never
+        // resolve and would risk a reload burst. Strip pending enhance
+        // state from snapshots; live garments untouched (boot resumes).
+        // studioRenderUrl *URLs* (small strings) stay on snapshots so saved
+        // looks keep showing the final when it exists; SVG fallback covers
+        // the rest.
+        if (version < 8) {
+          const stripSnap = (g: any) => {
+            if (!g || typeof g !== "object") return g;
+            if (g.studioRenderStatus === "pending" && !g.studioRenderUrl) {
+              const { studioRenderStatus: _s, ...rest } = g;
+              void _s;
+              return rest;
+            }
+            return g;
+          };
+          const stripOutfit = (o: any) => {
+            if (!o || typeof o !== "object") return o;
+            const next = { ...o };
+            for (const k of Object.keys(next)) next[k] = stripSnap(next[k]);
+            return next;
+          };
+          state = {
+            ...state,
+            looks: ((state as any).looks ?? []).map((l: any) => ({
+              ...l,
+              outfit: stripOutfit(l.outfit),
+            })),
+            today: (state as any).today
+              ? { ...(state as any).today, outfit: stripOutfit((state as any).today.outfit) }
+              : (state as any).today,
+          };
+        }
+        // v8 → v9 (Phase 5): closet-upgrade queue was explicit opt-in
+        // state. Retired with the recon rewrite — drop the whole slice.
+        if (version < 9) {
+          const { closetUpgrade: _u, ...rest } = state as Record<string, unknown>;
+          void _u;
+          state = rest;
+        }
+        // v9 → v10 (speed): image blobs moved to IndexedDB — localStorage
+        // snapshots no longer carry them. Nothing to transform: in-memory
+        // blobs backfill IDB at boot (reconcileBlobsAtBoot) and the next
+        // persist write slims itself. (Upgrade-park step retired with v8→v9.)
+        if (version < 10) {
+          const { closetUpgrade: _u, ...rest } = state as Record<string, unknown>;
+          void _u;
+          state = rest;
+        }
+        // v10 → v11: photo-faithful AI flat-lay fields (retired). Strip
+        // them so no snapshot carries dead rendering state.
+        if (version < 11) {
+          const stripDead = (g: any) => {
+            if (!g || typeof g !== "object") return g;
+            const {
+              studioFlatLay: _f,
+              studioFlatLayStatus: _fs,
+              studioComposite: _c,
+              studioCompositeStatus: _cs,
+              studioRenderUrl: _r,
+              studioRenderStatus: _rs,
+              ...rest
+            } = g;
+            void _f;
+            void _fs;
+            void _c;
+            void _cs;
+            void _r;
+            void _rs;
+            return rest;
+          };
+          state = {
+            ...state,
+            garments: ((state as any).garments ?? []).map(stripDead),
+          };
+        }
+        // v11 → v12 (recon rewrite): single source of truth. Strip ALL
+        // old-pipeline rendering fields from live garments AND snapshots;
+        // initialise recon state idle (never "pending": no phantom
+        // progress, no surprise quota on reload). Boot resumes genuinely
+        // pending recon jobs; failed ones wait for manual retryRecon.
+        if (version < 12) {
+          const stripDead = (g: any) => {
+            if (!g || typeof g !== "object") return g;
+            const {
+              studioFlatLay: _f,
+              studioFlatLayStatus: _fs,
+              studioComposite: _c,
+              studioCompositeStatus: _cs,
+              studioRenderUrl: _r,
+              studioRenderStatus: _rs,
+              ...rest
+            } = g;
+            void _f;
+            void _fs;
+            void _c;
+            void _cs;
+            void _r;
+            void _rs;
+            return {
+              ...rest,
+              reconUrl: (rest as any).reconUrl ?? undefined,
+              reconStatus:
+                (rest as any).reconStatus === "ready" &&
+                (rest as any).reconUrl
+                  ? "ready"
+                  : undefined,
+              reconError: undefined,
+            };
+          };
+          const stripOutfit = (o: any) => {
+            if (!o || typeof o !== "object") return o;
+            const next = { ...o };
+            for (const k of Object.keys(next)) next[k] = stripDead(next[k]);
+            return next;
+          };
+          const { closetUpgrade: _u, ...noUpgrade } = state as Record<string, unknown>;
+          void _u;
+          state = {
+            ...noUpgrade,
+            garments: (((noUpgrade as any).garments ?? []) as any[]).map(stripDead),
+            looks: (((noUpgrade as any).looks ?? []) as any[]).map((l: any) => ({
+              ...l,
+              outfit: stripOutfit(l.outfit),
+            })),
+            today: (noUpgrade as any).today
+              ? {
+                  ...(noUpgrade as any).today,
+                  outfit: stripOutfit((noUpgrade as any).today.outfit),
+                }
+              : (noUpgrade as any).today,
+          };
+        }
+        if (version < 13) {
+          // v13: keep image BYTES out of the snapshot entirely.
+          //
+          // Before this, a persisted closet carried `reconUrl` (a ~140 KB PNG
+          // data URL) on every reconned garment and a ~5 KB SVG `rendering`
+          // data URL on every garment regardless. That is 5.8 MB at 40
+          // reconned garments — 57× the 100 KB budget — and the same recon
+          // bytes were ALSO in IndexedDB, so it was a genuine second copy.
+          //
+          // Existing installs already hold those strings, so the strip has to
+          // happen on read as well as on write: `partialize` alone would only
+          // shrink the NEXT write, leaving the first boot after upgrade heavy.
+          // Both fields are recoverable (recon from IDB, rendering regenerated
+          // deterministically), so nothing is lost by dropping them here.
+          const s13 = state as Record<string, any>;
+          state = {
+            ...s13,
+            garments: ((s13.garments ?? []) as any[]).map(stripImageBytes),
+            looks: ((s13.looks ?? []) as any[]).map((l: any) => ({
+              ...l,
+              outfit: stripOutfitImages(l.outfit),
+            })),
+            today: s13.today
+              ? { ...s13.today, outfit: stripOutfitImages(s13.today.outfit) }
+              : s13.today,
+          };
         }
         return state as never;
       },
       partialize: (s) => ({
         theme: s.theme,
         units: s.units,
-        garments: s.garments.map((g) => ({ ...g, photo: undefined })), // omit base64 photos from localStorage
-        looks: s.looks,
+        // LEAN SNAPSHOTS — no image bytes, ever.
+        //
+        // `partialize` is the last gate before `localStorage`, so the strip
+        // lives here and applies on every write. `photo`, `reconUrl` (when it
+        // is a data URL) and the SVG `rendering` data URL are all removed;
+        // `http(s)` references are kept because they cost nothing and are the
+        // canonical remote copy in live mode.
+        //
+        // What that means at boot: the snapshot says WHICH image a tile should
+        // show, and `services/imageCache.ts` resolves the bytes per tile on
+        // demand (memory → IndexedDB → http). Tiles therefore paint from the
+        // lean record and swap the image in when it lands, instead of the store
+        // re-inflating every garment's bytes before first paint.
+        garments: s.garments.map(stripImageBytes),
+        looks: s.looks.map((l) => ({
+          ...l,
+          outfit: stripOutfitImages(l.outfit) as typeof l.outfit,
+        })),
         schedules: s.schedules,
-        today: s.today,
+        today: s.today
+          ? {
+              ...s.today,
+              outfit: stripOutfitImages(s.today.outfit) as typeof s.today.outfit,
+            }
+          : s.today,
         ownerId: s.ownerId,
         onboardedUsers: s.onboardedUsers,
         profile: s.profile,
@@ -1040,6 +1965,7 @@ export const useAppStore = create<AppStore>()(
           errorGarments: Array.from(toSet(s._syncState.errorGarments)),
           errorLooks: Array.from(toSet(s._syncState.errorLooks)),
         },
+        // No batch-upgrade slice remains (retired with the recon rewrite).
       }),
     }
   )
